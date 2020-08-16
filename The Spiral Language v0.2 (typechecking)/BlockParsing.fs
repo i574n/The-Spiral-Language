@@ -42,16 +42,16 @@ type Op =
     // BinOps
     | Add
     | Sub
-    | Mult 
-    | Div 
-    | Mod 
+    | Mult
+    | Div
+    | Mod
     | Pow
     | LTE
     | LT
     | EQ
     | NEQ
     | GT
-    | GTE 
+    | GTE
     | BoolAnd
     | BoolOr
     | BitwiseAnd
@@ -65,7 +65,7 @@ type Op =
     | ArrayLength
     | ArrayIndex
     | ArrayIndexSet
-   
+
     // Static unary operations
     | PrintStatic
     | ErrorType
@@ -206,6 +206,7 @@ and RawTExpr =
     | RawTRecord of Range * Map<string,RawTExpr>
     | RawTSymbol of Range * SymbolString
     | RawTApply of Range * RawTExpr * RawTExpr
+    | RawTRecordApply of Range * RawTExpr * RawTExpr
     | RawTForall of Range * TypeVar * RawTExpr
     | RawTPrim of Range * PrimitiveType
     | RawTArray of Range * RawTExpr
@@ -301,7 +302,7 @@ let print_current d = try_current d (fun x -> printfn "%A" x; Ok()) // For parse
 let inline line_template d f = try_current_template d (fst >> f) (fun _ -> -1)
 let col d = line_template d (fun (r,_) -> r.character)
 let line d = line_template d (fun (r,_) -> r.line)
-   
+
 let skip' (d : Env) i = d.i := d.i.contents+i
 let skip d = skip' d 1
 
@@ -432,25 +433,25 @@ let inline range exp s =
 let rec kind d = (sepBy1 ((skip_op "*" >>% RawKindStar) <|> rounds kind) (skip_op "->") |>> List.reduceBack (fun a b -> RawKindFun (a,b))) d
 let forall_var d = range ((read_type_var |>> fun x -> x, RawKindStar) <|> rounds ((read_type_var .>> skip_op ":") .>>. kind)) d
 
-let duplicates er x = 
+let duplicates er x =
     let h = Collections.Generic.HashSet()
     x |> List.choose (fun (r,n) -> if h.Add n = false then Some(r,er) else None)
-let forall d = 
-    (skip_keyword SpecForall >>. (many1 forall_var) .>> skip_op "." 
+let forall d =
+    (skip_keyword SpecForall >>. (many1 forall_var) .>> skip_op "."
     >>= fun x _ -> duplicates DuplicateForallVar x |> function [] -> Ok x | er -> Error er) d
-let inline type_forall next d = (pipe2 (forall <|>% []) next (List.foldBack (fun x s -> RawTForall(range_of_typevar x +. range_of_texpr s,x,s)))) d 
+let inline type_forall next d = (pipe2 (forall <|>% []) next (List.foldBack (fun x s -> RawTForall(range_of_typevar x +. range_of_texpr s,x,s)))) d
 
 let inline indent i op next d = if op i (col d) then next d else Error []
 
 let record_var d = (read_var <|> rounds read_op) d
 
-let patterns_validate pats = 
+let patterns_validate pats =
     let pos = Collections.Generic.Dictionary(HashIdentity.Reference)
     let errors = ResizeArray()
     let rec loop pat =
         match pat with
-        | PatDefaultValue _ | PatValue _ | PatSymbol _ | PatE | PatB -> Set.empty
-        | PatVar(r,x) -> 
+        | PatDefaultValue _ | PatValue _ | PatSymbol _ | PatE _ | PatB _ -> Set.empty
+        | PatVar(r,x) ->
             pos.Add(x,r)
             Set.singleton x
         | PatDyn(_,p) | PatAnnot (_,p,_) | PatNominal(_,_,p) | PatActive (_,_,p) | PatUnbox(_,p) | PatWhen(_,p,_) -> loop p
@@ -467,16 +468,16 @@ let patterns_validate pats =
                     ) items
             match x with _ :: _ :: _ -> Set.intersectMany x |> Set.iter (fun x -> errors.Add (pos.[x], InvalidPattern DuplicateVar)) | _ -> ()
             Set.unionMany x
-        | PatPair(_,a,b) | PatAnd(_,a,b) -> 
+        | PatPair(_,a,b) | PatAnd(_,a,b) ->
             let a, b = loop a, loop b
             Set.intersect a b |> Set.iter (fun x -> errors.Add (pos.[x], InvalidPattern DuplicateVar))
             a + b
-        | PatOr(_,a,b) -> 
+        | PatOr(_,a,b) ->
             let a, b = loop a, loop b
             let f = Set.iter (fun x -> errors.Add (pos.[x], InvalidPattern DisjointOrPatternVar))
             f (a-b); f (b-a)
             a
-    
+
     List.fold (fun s x ->
         let s' = loop x
         Set.intersect s s' |> Set.iter (fun x -> errors.Add(pos.[x],InvalidPattern ShadowedVar))
@@ -493,21 +494,21 @@ let inl_or_let_process (r, (is_let, is_rec, name, foralls, pats, body)) _ =
     // TODO: Rather than return an error during parsing for this particular error, for the typechecking pass I'll replace it with a metavariable stump.
     | None -> Error [r, MissingFunctionBody]
     | Some body ->
-        
+
         let name, pats =
             match name with
             | PatUnbox(_,PatPair(_,PatSymbol(r,name), pat)) -> PatVar(r,name), pat :: pats
             | _ -> name, pats
         let dyn_if_let x = if is_let then x else PatDyn(range_of_pattern x, x)
         match is_rec, name, foralls, pats with
-        | false, _, [], [] -> 
+        | false, _, [], [] ->
             match patterns_validate [name] with
             | [] -> Ok((r,dyn_if_let name,body),is_rec)
             | ers -> Error ers
-        | _, PatVar _, _, _ -> 
+        | _, PatVar _, _, _ ->
             match patterns_validate (if is_rec then name :: pats else pats) with
-            | [] -> 
-                let body = 
+            | [] ->
+                let body =
                     (if is_let then let_join_point body else body)
                     |> List.foldBack (fun pat body -> RawFun(range_of_pattern pat +. range_of_expr body,[dyn_if_let pat,body])) pats
                     |> List.foldBack (fun typevar body -> RawForall(range_of_typevar typevar +. range_of_expr body,typevar,body)) foralls
@@ -531,7 +532,7 @@ let inline and_inl_or_let exp pattern =
     >>= inl_or_let_process
 
 type Associativity = FParsec.Associativity
-let inbuilt_operators x = 
+let inbuilt_operators x =
     match x with
     | "+" -> ValueSome(60, Associativity.Left)
     | "-" -> ValueSome(60, Associativity.Left)
@@ -540,7 +541,7 @@ let inbuilt_operators x =
     | "%" -> ValueSome(70, Associativity.Left)
     | "|>" -> ValueSome(10, Associativity.Left)
     | ">>" -> ValueSome(10, Associativity.Left)
-    
+
     | "<=" -> ValueSome(40, Associativity.None)
     | "<" -> ValueSome(40, Associativity.None)
     | "=" -> ValueSome(40, Associativity.None)
@@ -566,9 +567,9 @@ let inbuilt_operators x =
     | "**" -> ValueSome(80, Associativity.Right)
     | _ -> ValueNone
 
-// Since `.` is an operator in Spiral, unlike in F# it does not filter out `.`s. Instead it just trims the right side until 
+// Since `.` is an operator in Spiral, unlike in F# it does not filter out `.`s. Instead it just trims the right side until
 // it finds (or fails to find) a match.
-let rec precedence_associativity name = 
+let rec precedence_associativity name =
     if 0 < String.length name then
         match inbuilt_operators name with
         | ValueNone -> precedence_associativity (name.[0..name.Length-2])
@@ -584,27 +585,27 @@ let op (d : Env) =
             | ValueNone -> Error [o, UnknownOperator]
             | ValueSome(p,a) ->
                 match x with
-                | "." -> Ok(p,a,fun (a,b) -> 
+                | "." -> Ok(p,a,fun (a,b) ->
                     let ra, rb = range_of_expr a, range_of_expr b
                     let r = ra +. rb
                     RawSeq(r,a,b)
                     )
-                | "&&" -> Ok(p,a,fun (a,b) -> 
+                | "&&" -> Ok(p,a,fun (a,b) ->
                     let ra, rb = range_of_expr a, range_of_expr b
                     let r = ra +. rb
                     RawIfThenElse(r,a,b,RawLit(o,LitBool false))
                     )
-                | "||" -> Ok(p,a,fun (a,b) -> 
+                | "||" -> Ok(p,a,fun (a,b) ->
                     let ra, rb = range_of_expr a, range_of_expr b
                     let r = ra +. rb
                     RawIfThenElse(r,a,RawLit(o,LitBool true),b)
                     )
-                | "," -> Ok(p,a,fun (a,b) -> 
+                | "," -> Ok(p,a,fun (a,b) ->
                     let ra, rb = range_of_expr a, range_of_expr b
                     let r = ra +. rb
                     RawPairCreate(r,a,b)
                     )
-                | x -> Ok(p,a,fun (a,b) -> 
+                | x -> Ok(p,a,fun (a,b) ->
                     let ra, rb = range_of_expr a, range_of_expr b
                     let r = ra +. rb
                     RawApply(r,RawApply(ra +. o,RawV(o,x),a),b)
@@ -635,8 +636,8 @@ let inline unit' f d =
     else
         Error []
 
-let inline pat_pair next = 
-    sepBy1 next (skip_op ",") 
+let inline pat_pair next =
+    sepBy1 next (skip_op ",")
     |>> List.reduceBack (fun a b -> PatPair(range_of_pattern a +. range_of_pattern b,a,b))
 
 type RootTypeFlags = {
@@ -675,7 +676,7 @@ let bottom_up_number (r : Range,x : string) (d : Env) =
 
 let inline read_default_value on_top on_bot d =
     try_current d <| function
-        | p, TokDefaultValue t' -> 
+        | p, TokDefaultValue t' ->
             skip d
             if d.is_top_down then Ok(on_top (p,t'))
             else bottom_up_number (p,t') d |> Result.map on_bot
@@ -683,17 +684,17 @@ let inline read_default_value on_top on_bot d =
 
 let pat_var d =
     (read_var' |>> fun (r,a,re) ->
-        if Char.IsUpper(a,0) then 
+        if Char.IsUpper(a,0) then
             re := SemanticTokenLegend.symbol
             PatUnbox(r,PatPair(r,PatSymbol(r,to_lower a), PatB r))
         else PatVar(r,a)
         ) d
 let rec pat_nominal d =
     (read_var' >>= fun (r,a,re) _ ->
-        if Char.IsUpper(a,0) then 
+        if Char.IsUpper(a,0) then
             re := SemanticTokenLegend.symbol
             Ok(PatUnbox(r,PatPair(r,PatSymbol(r,to_lower a), PatB r)))
-        else 
+        else
             ((root_pattern_var |>> fun b ->
                 re := SemanticTokenLegend.type_variable
                 PatNominal(r +. range_of_pattern b,(r,a),b)
@@ -702,10 +703,10 @@ let rec pat_nominal d =
 and pat_wildcard d = (skip_keyword' SpecWildcard |>> PatE) d
 and pat_dyn d = (range (skip_unary_op "~" >>. root_pattern_var) |>> PatDyn) d
 and root_pattern s =
-    let body s = 
+    let body s =
         let pat_unit = unit' PatB
-        let pat_active = 
-            range (skip_unary_op "!" >>. ((read_small_var' |>> RawV) <|> rounds root_term) .>>. root_pattern_var) 
+        let pat_active =
+            range (skip_unary_op "!" >>. ((read_small_var' |>> RawV) <|> rounds root_term) .>>. root_pattern_var)
             |>> fun (r,(a,b)) -> PatActive(r,a,b)
         let pat_value = (read_value |>> PatValue) <|> (read_default_value PatDefaultValue PatValue)
         let pat_record_item =
@@ -719,12 +720,12 @@ and root_pattern s =
         let (+) = alt (index s)
         (pat_unit + pat_rounds + pat_nominal + pat_wildcard + pat_dyn + pat_value + pat_record + pat_symbol + pat_active) s
 
-    let pat_type = 
+    let pat_type =
         pipe2 body (opt (skip_op ":" >>. fun d -> root_type {root_type_defaults with allow_term=d.is_top_down=false; allow_wildcard=d.is_top_down} d))
             (fun a -> function Some b -> PatAnnot(range_of_pattern a +. range_of_texpr b,a,b) | None -> a)
     let pat_and = sepBy1 pat_type (skip_op "&") |>> List.reduce (fun a b -> PatAnd(range_of_pattern a +. range_of_pattern b,a,b))
     let pat_pair = pat_pair pat_and
-    let pat_symbol_paired = 
+    let pat_symbol_paired =
         let next = pat_pair
         (many1 (read_symbol_paired' .>>. opt next) |>> fun l ->
             let f ((r,a,re),b) = (r, a), Option.defaultWith (fun () -> re := SemanticTokenLegend.variable; PatVar(r,a)) b
@@ -740,7 +741,7 @@ and root_pattern s =
     let pat_as = pat_or .>>. (opt (skip_keyword SpecAs >>. pat_or )) |>> function a, Some b -> PatAnd(range_of_pattern a +. range_of_pattern b,a,b) | a, None -> a
     let pat_when = pat_as .>>. (opt (skip_keyword SpecWhen >>. root_term)) |>> function a, Some b -> PatWhen(range_of_pattern a +. range_of_expr b,a,b) | a, None -> a
     pat_when s
-and root_pattern_var d = 
+and root_pattern_var d =
     let (+) = alt (index d)
     (pat_var + pat_wildcard + pat_dyn + peek_open_parenthesis root_pattern) d
 and root_pattern_pair d = pat_pair root_pattern_var d
@@ -757,7 +758,7 @@ and root_type (flags : RootTypeFlags) d =
                 x |> List.map fst |> duplicates DuplicateRecordTypeVar
                 |> function [] -> Ok(RawTRecord(r,x |> List.map (fun ((_,n),x) -> n,x) |> Map.ofList)) | er -> Error er
         let symbol = read_symbol |>> RawTSymbol
-    
+
         let var = read_var' |>> fun (o,x,r) ->
             if Char.IsUpper(x,0) then
                 r := SemanticTokenLegend.symbol
@@ -781,25 +782,25 @@ and root_type (flags : RootTypeFlags) d =
                 | x -> RawTVar(o, x)
         let (+) = alt (index d)
         (unit' RawTB + rounds next + wildcard + term + metavar + var + record + symbol) d
-    let apply d = 
-        (pipe2 cases (many (indent (col d) (<) cases)) 
-            (fun a b -> 
-                List.reduce (fun a b -> 
-                    match a with 
+    let apply d =
+        (pipe2 cases (many (indent (col d) (<) cases))
+            (fun a b ->
+                List.reduce (fun a b ->
+                    match a with
                     | RawTVar(ra, "array") -> RawTArray(ra +. range_of_texpr b, b)
                     | _ -> RawTApply(range_of_texpr a +. range_of_texpr b,a,b)
                     ) (a :: b))) d
     let record_apply = sepBy1 apply (skip_op "@") |>> List.reduceBack (fun a b -> RawTRecordApply(range_of_texpr a +. range_of_texpr b,a,b))
     let pairs = sepBy1 record_apply (skip_op ",") |>> List.reduceBack (fun a b -> RawTPair(range_of_texpr a +. range_of_texpr b,a,b))
     let functions = sepBy1 pairs (skip_op "->") |>> List.reduceBack (fun a b -> RawTFun(range_of_texpr a +. range_of_texpr b,a,b))
-    let symbol_paired d = 
+    let symbol_paired d =
         let next = functions
         ((many1 (indent (col d) (<=) read_symbol_paired .>>. next) >>= fun l _ ->
             match List.unzip l with
             | [], _ -> failwith "Compiler error: Single item expected."
             | (r,x) :: k', v ->
                 if Char.IsLower(x,0) then
-                    List.reduceBack (fun a b -> RawTPair(range_of_texpr a +. range_of_texpr b,a,b)) 
+                    List.reduceBack (fun a b -> RawTPair(range_of_texpr a +. range_of_texpr b,a,b))
                         (RawTSymbol(r,symbol_paired_concat ((r,x) :: k')) :: v) |> Ok
                 else
                     Error [r, SymbolPairedShouldStartWithLowercaseInTypeScope]
@@ -819,33 +820,33 @@ and root_term d =
                 match patterns_validate pats with
                 | [] -> List.foldBack (fun pat body -> RawFun(range_of_pattern pat +. range_of_expr body,[pat,body])) pats body |> Ok
                 | ers -> Error ers
-            
+
         let case_forall d =
             if d.is_top_down then Error [] else
                 (tuple3 forall (many root_pattern_pair) (skip_op "=>" >>. next)
                 >>= fun (foralls, pats, body) _ ->
                     match patterns_validate pats with
-                    | [] -> 
+                    | [] ->
                         List.foldBack (fun pat body -> RawFun(range_of_pattern pat +. range_of_expr body,[pat,body])) pats body
                         |> List.foldBack (fun a body -> RawForall(range_of_typevar a +. range_of_expr body,a,body)) foralls |> Ok
                     | ers -> Error ers) d
 
         let case_value = read_value |>> RawLit
         let case_default_value = read_default_value RawDefaultLit RawLit
-        let case_if_then_else d = 
+        let case_if_then_else d =
             let i = col d
             let inline f' keyword = range (skip_keyword keyword >>. next)
             let inline f keyword = indent i (<=) (f' keyword)
             (pipe4 (f' SpecIf) (f SpecThen) (many (f SpecElif .>>. f SpecThen)) (opt (f SpecElse))
-                (fun cond tr elifs fl -> 
+                (fun cond tr elifs fl ->
                     let f cond tr = function
                         | Some fl -> fst fl, RawIfThenElse(fst cond +. fst fl,snd cond,snd tr,snd fl)
                         | None -> fst tr, RawIfThen(fst cond +. fst tr,snd cond,snd tr)
                     let fl = List.foldBack (fun (cond,tr) fl -> f cond tr fl |> Some) elifs fl
                     f cond tr fl |> snd)) d
-        
+
         let case_match =
-            let clauses d = 
+            let clauses d =
                 let bar = bar (col d)
                 (optional bar >>. sepBy1 (root_pattern .>>. (skip_op "=>" >>. next)) bar
                 >>= fun l _ ->
@@ -858,7 +859,7 @@ and root_term d =
             <|> (range ((skip_keyword SpecMatch >>. next .>> skip_keyword SpecWith) .>>. clauses) |>> fun (a,(b,c)) -> RawMatch(a,b,c))
 
         let case_typecase d =
-            let clauses d = 
+            let clauses d =
                 let bar = bar (col d)
                 (optional bar >>. sepBy1 (root_type {root_type_defaults with allow_metavars=true; allow_wildcard=true} .>>. (skip_op "=>" >>. next)) bar) d
 
@@ -887,7 +888,7 @@ and root_term d =
                             ((skip_keyword SpecWith >>. sepBy record_with_bodies (optional (skip_op ";"))) <|>% [])
                             ((skip_keyword SpecWithout >>. many record_without_bodies) <|>% [])))
                 |>> fun (r,(name, acs, withs, withouts)) -> (r,RawV name :: acs,withs,withouts)
-        
+
             restore 2 record_with <|> record_create
             >>= fun (_,_,withs,withouts as x) _ ->
                 [
@@ -900,11 +901,11 @@ and root_term d =
         let case_join_point = skip_keyword SpecJoin >>. next |>> fun x -> RawJoinPoint(range_of_expr x,x)
         let case_real = skip_keyword SpecReal >>. (fun d -> next {d with is_top_down=false}) |>> fun x -> RawReal(range_of_expr x,x)
         let case_symbol = read_symbol |>> RawSymbolCreate
-        let case_unary_op = 
+        let case_unary_op =
             read_unary_op' >>= fun (o,a) d ->
                 let type_expr d = ((read_small_var' |>> RawTVar) <|> (rounds (fun d -> root_type {root_type_defaults with allow_term=true} d))) d
                 match a with
-                | "!!!!" -> 
+                | "!!!!" ->
                     (range (read_big_var .>>. (rounds (sepBy1 (fun d -> expressions {d with is_top_down=false}) (skip_op ","))))
                     >>= fun (r,((ra,a), b)) _ ->
                         match string_to_op a with
@@ -922,7 +923,7 @@ and root_term d =
 
     let application_tight d =
         let next = expressions
-        let inline expr_tight (d: Env) = 
+        let inline expr_tight (d: Env) =
             let i = index d
             if 0 < i && i < d.tokens.Length then
                 let r,r' = snd (fst d.tokens.[i-1]), fst (fst d.tokens.[i])
@@ -946,7 +947,7 @@ and root_term d =
             | _ -> (tdop prec |>> fun right -> m (left, right)) d
 
         and tdop rbp d =
-            let rec loop left d = 
+            let rec loop left d =
                 ((op >>= fun (prec,_,_ as v) d ->
                     if rbp < prec then (led left v >>= loop) d
                     else skip' d -1; Error []) <|>% left) d
@@ -975,33 +976,33 @@ and root_term d =
         let next = symbol_paired
         let inl_or_let =
             (inl_or_let root_term root_pattern_pair .>>. many (and_inl_or_let root_term root_pattern_pair))
-            >>= fun x _ -> 
+            >>= fun x _ ->
                 match x with
                 | ((r,name,body),false), [] -> Ok(fun on_succ -> RawMatch(r,body,[name,on_succ]))
                 | ((_,_,_),false), l -> l |> List.map (fun ((r,_,_),_) -> r, UnexpectedAndInlRec) |> Error
                 | x, xs ->
-                    let l = x :: xs |> List.map (function 
+                    let l = x :: xs |> List.map (function
                         | (r,PatVar(o,name),body),true -> r, ((o,name), body)
                         | _ -> failwith "Compiler error: Recursive inl/let statements should always have PatVar or PatOperator for names and should always be recursive."
                         )
                     let r = l |> List.map fst |> List.reduce (+.)
-                    l |> List.map (snd >> fst) 
+                    l |> List.map (snd >> fst)
                     |> duplicates DuplicateRecFunctionName
                     |> function [] -> Ok(fun on_succ -> RawRecBlock(r, List.map snd l, on_succ)) | er -> Error er
         let module_open = module_open |>> fun (r,(name,acs)) on_succ -> RawModuleOpen(r,name,acs,on_succ)
         let statement_parsers d =
             let (+) = alt (index d)
             (inl_or_let + module_open) d
-        
+
         let i = col d
         let inline if_ x = indent i x
-        let stmts = 
+        let stmts =
             many1 (if_ (=) (range statement_parsers)) .>>. opt ((if_ (<=) (skip_keyword SpecIn) >>. root_term) <|> if_ (=) next)
             >>= fun (a,b) _ -> match b with Some b -> Ok(a,b) | None -> Error [List.last a |> fst, ExpectedExpression]
         let expr = if_ (=) next |>> fun x -> [],x
         (many1 (stmts <|> expr)
-        |>> fun x -> 
-            List.foldBack (fun (stmts,expr) s -> 
+        |>> fun x ->
+            List.foldBack (fun (stmts,expr) s ->
                 let process_statements s = List.foldBack (fun (_,a) b -> a b) stmts s
                 match s with
                 | ValueNone -> ValueSome (process_statements expr)
@@ -1011,9 +1012,9 @@ and root_term d =
 
     statements d
 
-let comments line_near_to character (s : Env) = 
+let comments line_near_to character (s : Env) =
     let rec loop line d =
-        if line < 0 then 
+        if line < 0 then
             match s.comments.[line] with
             | Some(r,text) when r.from = character -> loop (line-1) (text :: d)
             | _ -> d
@@ -1047,10 +1048,10 @@ let top_union d =
     (range ((skip_keyword SpecUnion >>. many forall_var .>> skip_op "=") .>>. clauses) |>> fun (r,(a,b)) -> TopUnion(r,a,b)) d
 
 let top_nominal d = (range ((skip_keyword SpecNominal >>. many forall_var .>> skip_op "=") .>>. root_type {root_type_defaults with allow_term=true}) |>> fun (r,(a,b)) -> TopNominal(r,a,b)) d
-let top_prototype d = 
-    (range 
+let top_prototype d =
+    (range
         (tuple4
-            (skip_keyword SpecPrototype >>. read_small_var) read_type_var (many forall_var) 
+            (skip_keyword SpecPrototype >>. read_small_var) read_type_var (many forall_var)
             (skip_op ":" >>. type_forall (root_type root_type_defaults)))
     |>> fun (r,(a,b,c,d)) -> TopPrototype(r,a,b,c,d)) d
 let top_type d = (range (tuple3 (skip_keyword SpecType >>. read_small_var) (many forall_var) (skip_op "=" >>. root_type root_type_defaults)) |>> fun (r,(a,b,c)) -> TopType(r,a,b,c)) d
@@ -1068,14 +1069,14 @@ let top_instance d =
                 Ok(TopInstance(r,prototype_name,nominal_name,nominal_foralls,body))
             | ers -> Error ers) d
 
-let top_and_inl_or_let d = 
-    (restore 1 (range (and_inl_or_let root_term root_pattern_pair)) 
+let top_and_inl_or_let d =
+    (restore 1 (range (and_inl_or_let root_term root_pattern_pair))
     >>= fun (r,x) d -> top_inl_or_let_process d.is_top_down x |> Result.map (fun x -> TopAnd(r,x))) d
 let inline top_and f = restore 1 (range (skip_keyword SpecAnd >>. f)) |>> TopAnd
 
 let top_statement s =
     let (+) = alt (index s)
-    (top_inl_or_let + top_union + top_nominal + top_prototype + top_type + top_instance 
+    (top_inl_or_let + top_union + top_nominal + top_prototype + top_type + top_instance
     + top_and_inl_or_let + top_and top_nominal + top_and top_union) s
 
 let parse (s : Env) =

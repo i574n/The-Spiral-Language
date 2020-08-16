@@ -35,6 +35,3 @@ type ConnectionState =
     | Closed
     | Disposed
 
-
-let mutable c = 0
-let x = Observable.

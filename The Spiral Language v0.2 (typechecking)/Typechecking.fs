@@ -11,7 +11,7 @@ type TT =
 type ConstraintId =
     | CINumber // * -> /
 
-let id_to_kind x = 
+let id_to_kind x =
     let (^) a b = KindFun(a,b) // ^ is right assoc
     match x with
     | CINumber -> KindType ^ KindConstraint
@@ -144,7 +144,7 @@ let assert_bound_vars' (top_env : Env) term ty x =
         | RawMatch(_,body,l) -> cterm term ty body; List.iter (fun (a,b) -> cterm (cpattern term ty a) ty b) l
         | RawFun(_,l) -> List.iter (fun (a,b) -> cterm (cpattern term ty a) ty b) l
         | RawForall(_,(_,(a,_)),b) -> cterm term (Set.add a ty) b
-        | RawRecBlock(_,l,on_succ) -> 
+        | RawRecBlock(_,l,on_succ) ->
             let term = List.fold (fun s ((_,x),_) -> Set.add x s) term l
             List.iter (fun (_,x) -> cterm term ty x) l
             cterm term ty on_succ
@@ -158,9 +158,9 @@ let assert_bound_vars' (top_env : Env) term ty x =
         | RawOp(_,_,l) -> List.iter (cterm term ty) l
         | RawReal(_,x) | RawJoinPoint(_,x) -> cterm term ty x
         | RawAnnot(_,a,b) -> cterm term ty a; ctype term ty b
-        | RawTypecase(_,a,b) -> 
+        | RawTypecase(_,a,b) ->
             ctype term ty a
-            List.iter (fun (a,b) -> 
+            List.iter (fun (a,b) ->
                 ctype term ty a
                 cterm term (ty + metavars a) b
                 ) b
@@ -183,11 +183,11 @@ let assert_bound_vars' (top_env : Env) term ty x =
         | RawTTerm (_,a) -> cterm term ty a
     and cpattern term ty x =
         //let is_first = System.Collections.Generic.HashSet()
-        let rec loop term x = 
+        let rec loop term x =
             let f = loop term
             match x with
             | PatDefaultValue _ | PatValue _ | PatSymbol _ | PatB _ | PatE _ -> term
-            | PatVar(_,b) -> 
+            | PatVar(_,b) ->
                 //if is_first.Add b then () // TODO: I am doing it like this so I can reuse this code later for variable highting.
                 Set.add b term
             | PatDyn(_,x) | PatUnbox(_,x) -> f x
@@ -201,7 +201,7 @@ let assert_bound_vars' (top_env : Env) term ty x =
                     ) term l
             | PatActive(_,a,b) -> cterm term ty a; f b
             | PatAnd(_,a,b) | PatOr(_,a,b) -> loop (loop term a) b
-            | PatAnnot(_,a,b) -> let r = f a in ctype r ty b; r 
+            | PatAnnot(_,a,b) -> let r = f a in ctype r ty b; r
             | PatWhen(_,a,b) -> let r = f a in cterm r ty b; r
             | PatNominal(_,a,b) -> (if Map.containsKey (snd a) top_env.ty = false then errors.Add(fst a,UnboundVariable)); f b
         loop term x
@@ -268,21 +268,21 @@ let infer (aux : AuxEnv) (top_env : Env) (env : Env) expr : T =
     let fresh_var' kind = fresh_var'' {scope= !scope; constraints=Set.empty; kind=kind}
     let fresh_subst_var cons kind = fresh_var'' {scope= !scope; constraints=cons; kind=kind}
     let forall_subst_all x =
-        let rec loop m x = 
+        let rec loop m x =
             match visit_t x with
             | TyForall(a,b) -> loop ((a, fresh_subst_var a.constraints a.kind) :: m) b
             | x -> subst m x
         loop [] x
 
     let typevar_to_var ((r,(name,kind)) : TypeVar) : Var = {scope= !scope; constraints=Set.empty; kind=typevar kind; name=name}
-    let generalize (forall_vars : Var list) (body : T) = 
+    let generalize (forall_vars : Var list) (body : T) =
         let scope = !scope
         let generalized_metavars = ResizeArray()
         let rec replace_metavars x =
             let f = replace_metavars
             match x with
             | TyMetavar(_,{contents=Some x} & link) -> go x link f
-            | TyMetavar(x, link) when scope = x.scope -> 
+            | TyMetavar(x, link) when scope = x.scope ->
                 let x = {scope=x.scope; constraints=x.constraints; kind=kind_force x.kind; name=null}
                 generalized_metavars.Add(x)
                 TyVar x
@@ -297,7 +297,7 @@ let infer (aux : AuxEnv) (top_env : Env) (env : Env) expr : T =
 
         let f x s = TyForall(x,s)
         Seq.foldBack f generalized_metavars body
-        |> List.foldBack f forall_vars 
+        |> List.foldBack f forall_vars
 
     // Note: Loosening the annotation requirement for type definitions would necessitate an occurs check in kinds.
     let inline unify_kind' er (got : TT) (expected : TT) : unit =
@@ -326,12 +326,12 @@ let infer (aux : AuxEnv) (top_env : Env) (env : Env) expr : T =
             | TyForall(_,a) | TyInl(_,a) | TyArray a -> f a
             | TyApply(a,b,_) | TyFun(a,b) | TyPair(a,b) -> f a; f b
             | TyRecord l -> Map.iter (fun _ -> f) l
-            | TyVar x -> 
+            | TyVar x ->
                 if i.scope < x.scope then raise (TypeErrorException [r,ForallVarScopeError(x.name,got,expected)])
-                if i.constraints.IsSubsetOf x.constraints = false then raise (TypeErrorException [r,ForallVarConstraintError(x.name,got,expected)]) 
+                if i.constraints.IsSubsetOf x.constraints = false then raise (TypeErrorException [r,ForallVarConstraintError(x.name,got,expected)])
             | TyMetavar(x,_) -> if i = x then er() elif i.scope < x.scope then x.scope <- i.scope
 
-        let rec loop (a'',b'') = 
+        let rec loop (a'',b'') =
             match visit_t a'', visit_t b'' with
             | TyMetavar(a,link), TyMetavar(b,_) & b' ->
                 if a <> b then
@@ -382,7 +382,7 @@ let infer (aux : AuxEnv) (top_env : Env) (env : Env) expr : T =
             | Some a -> unify r a (TyFun(b,s))
             | None -> errors.Add(r,RecordIndexFailed x)
         | x -> errors.Add(r,ExpectedSymbolAsRecordKey x)
-           
+
     let assert_bound_vars env a =
         let keys_of m = Map.fold (fun s k _ -> Set.add k s) Set.empty m
         assert_bound_vars' top_env (keys_of env.term) (keys_of env.ty) (Choice1Of2 a) |> errors.AddRange
@@ -453,8 +453,8 @@ let infer (aux : AuxEnv) (top_env : Env) (env : Env) expr : T =
                 | _ -> raise (TypeErrorException [range_of_expr x, ExpectedSymbolInRecordWith])
             let tc (l,m) =
                 let m =
-                    List.fold (fun m x -> 
-                        let with_symbol ((_,a),b) = 
+                    List.fold (fun m x ->
+                        let with_symbol ((_,a),b) =
                             let v = fresh_var()
                             f v b
                             Map.add a v m
@@ -517,18 +517,18 @@ let infer (aux : AuxEnv) (top_env : Env) (env : Env) expr : T =
             List.iter (fun (env,on_succ) -> term env s on_succ) l
         | RawRecBlock(_,l,on_succ) ->
             incr scope
-            let l, has_forall = 
-                List.mapFold (fun has_forall ((_,a),b) -> 
+            let l, has_forall =
+                List.mapFold (fun has_forall ((_,a),b) ->
                     let vars, body = foralls_get b
                     (a, vars, body), has_forall || (List.isEmpty vars = false)
                     ) false l
             if has_forall then
-                let l = annotations_get l
-                
-                
+//                let l = annotations_get l
+
+
                 ()
             else
-                let l, m = List.mapFold (fun term (a,_,b) -> 
+                let l, m = List.mapFold (fun term (a,_,b) ->
                     let v = fresh_var()
                     ((a, v), b), Map.add a v term) env.term l
                 let _ =
@@ -545,19 +545,19 @@ let infer (aux : AuxEnv) (top_env : Env) (env : Env) expr : T =
         | RawTSymbol(r,x) -> unify r s (TySymbol x)
         | RawTPrim(r,x) -> unify r s (TyPrim x)
         | RawTArray(r,x) -> let v = fresh_var() in unify r s (TyArray v); f v x
-        | RawTVar(r,x) -> 
+        | RawTVar(r,x) ->
             match Map.tryFind x env.ty |> Option.orElseWith (fun () -> Map.tryFind x top_env.ty) with
             | Some x -> unify r s x
             | None -> errors.Add(r, UnboundVariable)
-        | RawTPair(r,a,b) -> 
+        | RawTPair(r,a,b) ->
             let q,w = fresh_var(), fresh_var()
             unify r s (TyPair(q,w))
             f q a; f w b
-        | RawTFun(r,a,b) -> 
+        | RawTFun(r,a,b) ->
             let q,w = fresh_var(), fresh_var()
             unify r s (TyFun(q,w))
             f q a; f w b
-        | RawTRecord(r,l) -> 
+        | RawTRecord(r,l) ->
             let l' = Map.map (fun _ _ -> fresh_var()) l
             unify r s (TyRecord l')
             Map.iter (fun k s -> f s l.[k]) l'
@@ -565,7 +565,7 @@ let infer (aux : AuxEnv) (top_env : Env) (env : Env) expr : T =
         | RawTApply(r,a',b) ->
             let f' k x = let v = fresh_var' k in f v x; visit_t v
             match f' (fresh_kind()) a' with
-            | TyRecord l -> 
+            | TyRecord l ->
                 match f' KindType b with
                 | TySymbol x ->
                     match Map.tryFind x l with
@@ -573,7 +573,7 @@ let infer (aux : AuxEnv) (top_env : Env) (env : Env) expr : T =
                     | None -> errors.Add(r,RecordIndexFailed x)
                 | b -> errors.Add(r,ExpectedSymbolAsRecordKey b)
             | TyInl(a,body) -> let v = fresh_var' a.kind in f v b; unify r s (subst [a,v] body)
-            | a -> 
+            | a ->
                 let q,w = fresh_kind(), fresh_kind()
                 unify_kind (range_of_texpr a') (tt a) (KindFun(q,w))
                 let x = fresh_var' q
@@ -581,14 +581,14 @@ let infer (aux : AuxEnv) (top_env : Env) (env : Env) expr : T =
                 unify r s (TyApply(a,x,w))
         | RawTTerm(r,a) -> assert_bound_vars env a; unify r s (TySymbol "<term>")
         | RawTMetaVar _ -> failwith "Compiler error: This particular metavar is only for typecase's clauses. This happens during the bottom-up segment."
-    and pattern env s a = 
+    and pattern env s a =
         let is_first = System.Collections.Generic.HashSet()
         let ho_make (i : int) (l : Var list) =
             let h = TyHigherOrder(i,List.foldBack (fun (x : Var) s -> KindFun(x.kind,s)) l KindType)
             let l' = List.map (fun (x : Var) -> x, fresh_subst_var x.constraints x.kind) l
             List.fold (fun s (_,x) -> match tt s with KindFun(_,k) -> TyApply(s,x,k) | _ -> failwith "impossible") h l', l'
-        let rec ho_index = function 
-            | TyApply(a,_,_) -> ho_index a 
+        let rec ho_index = function
+            | TyApply(a,_,_) -> ho_index a
             | TyHigherOrder(i,_) -> ValueSome i
             | _ -> ValueNone
         let rec loop env s a =
@@ -638,7 +638,7 @@ let infer (aux : AuxEnv) (top_env : Env) (env : Env) expr : T =
                     List.fold (fun env (a,b) -> pattern env a b) env l
                 | s ->
                     let l, env =
-                        List.mapFold (fun env (a,b) -> 
+                        List.mapFold (fun env (a,b) ->
                             let v = fresh_var()
                             (a, v), pattern env v b
                             ) env l
@@ -663,7 +663,7 @@ let infer (aux : AuxEnv) (top_env : Env) (env : Env) expr : T =
             | PatUnbox _ -> failwith "Compiler error: Malformed PatUnbox."
             | PatNominal(_,(r,name),a) ->
                 match Map.tryFind name top_env.ty with
-                | Some x -> 
+                | Some x ->
                     match ho_index x with
                     | ValueSome i ->
                         match aux.hoc.[i] with
@@ -698,7 +698,7 @@ type TopHigherOrder =
     | HONominal of name: string * id: int * (string * TT) list * RawTExpr
 
 let top_higher_order (l : TopHigherOrder list) (aux : AuxEnv) (top_env : Env) =
-    let top_env = 
+    let top_env =
         List.fold (fun s (HOUnion(name,i,vars,_) | HONominal(name,i,vars,_)) ->
             let tt = List.foldBack (fun (_,x) s -> KindFun(x,s)) vars KindType
             Map.add name (TyHigherOrder(i,tt)) s
@@ -713,7 +713,7 @@ let top_higher_order (l : TopHigherOrder list) (aux : AuxEnv) (top_env : Env) =
                 List.fold (fun cases expr ->
                     try assert_bound_vars top_env Set.empty (set_vars vars) (Choice2Of2 expr)
                         match infer aux top_env {term=Map.empty; ty=add_vars Map.empty vars} (Choice2Of2 expr) with
-                        | TyPair(TySymbol x, b) -> 
+                        | TyPair(TySymbol x, b) ->
                             if Map.containsKey x cases then errors.Add(range_of_texpr expr, DuplicateKeyInUnion); cases
                             else Map.add x b cases
                         | _ -> errors.Add (range_of_texpr expr, ExpectedSymbolAsUnionKey); cases
@@ -737,11 +737,11 @@ let top_prototype (name,a,vars,expr) aux (top_env : Env) =
     let vars = List.map var_of vars
     let l = var_of (a,tt) :: vars
     assert_bound_vars top_env Set.empty (set_vars vars) (Choice2Of2 expr)
-    let body = 
+    let body =
         infer aux top_env {term=Map.empty; ty=add_vars Map.empty vars} (Choice2Of2 expr)
         |> List.foldBack (fun a b -> TyForall(a,b)) l
     {top_env with term = Map.add name body top_env.term}
 
 open Spiral.Blockize
-let tc (l : Bundle list) = 
+let tc (l : Bundle list) =
     ()

@@ -38,7 +38,7 @@ type TokenKeyword =
 type ParenthesisState = Open | Close
 type Parenthesis = Round | Square | Curly
 
-type Literal = 
+type Literal =
     | LitUInt8 of uint8
     | LitUInt16 of uint16
     | LitUInt32 of uint32
@@ -80,7 +80,7 @@ type SpiralToken =
 let token_groups = function
     | TokVar (_,r) | TokSymbol (_,r) | TokSymbolPaired (_,r) -> !r
     | TokValue(LitString _) -> SemanticTokenLegend.string
-    | TokValue _ | TokDefaultValue -> SemanticTokenLegend.number
+    | TokValue _ | TokDefaultValue _ -> SemanticTokenLegend.number
     | TokOperator _ -> SemanticTokenLegend.operator
     | TokUnaryOperator _ -> SemanticTokenLegend.unary_operator
     | TokComment _ -> SemanticTokenLegend.comment
@@ -91,10 +91,10 @@ let is_small_var_char_starting c = Char.IsLower c || c = '_'
 let is_var_char c = Char.IsLetterOrDigit c || c = '_' || c = '''
 let is_big_var_char_starting c = Char.IsUpper c
 let is_var_char_starting c = Char.IsLetter c || c = '_'
-let is_parenth_open c = 
+let is_parenth_open c =
     let f x = c = x
     f '(' || f '[' || f '{'
-let is_parenth_close c = 
+let is_parenth_close c =
     let f x = c = x
     f ')' || f ']' || f '}'
 
@@ -102,18 +102,18 @@ let is_parenth_close c =
 let is_operator_char c =
     let f x = c = x
     '!' <= c && c <= '~' && (is_var_char c || f '"' || is_parenth_open c || is_parenth_close c) = false
-let is_prefix_separator_char c = 
+let is_prefix_separator_char c =
     let f x = c = x
     f ' ' || f eol || is_parenth_open c
-let is_postfix_separator_char c = 
+let is_postfix_separator_char c =
     let f x = c = x
     f ' ' || f eol || is_parenth_close c
 let is_separator_char c = is_prefix_separator_char c || is_parenth_close c
 
-let var (s: Tokenizer) = 
+let var (s: Tokenizer) =
     let from = s.from
     let ok x = ({from=from; nearTo=s.from}, x)
-    let body x = 
+    let body x =
         skip ':' s (fun () -> TokSymbolPaired(x,ref SemanticTokenLegend.symbol) |> ok)
             (fun () ->
                 let f x = TokKeyword(x)
@@ -129,7 +129,7 @@ let var (s: Tokenizer) =
                 | "inb" -> f SpecInb | "rec" -> f SpecRec
                 | "if" -> f SpecIf | "then" -> f SpecThen
                 | "elif" -> f SpecElif | "else" -> f SpecElse
-                | "join" -> f SpecJoin | "type" -> f SpecType 
+                | "join" -> f SpecJoin | "type" -> f SpecType
                 | "nominal" -> f SpecNominal | "real" -> f SpecReal
                 | "union" -> f SpecUnion
                 | "open" -> f SpecOpen | "_" -> f SpecWildcard
@@ -141,23 +141,23 @@ let var (s: Tokenizer) =
 
     (many1Satisfy2L is_var_char_starting is_var_char "variable" |>> body .>> spaces) s
 
-let number (s: Tokenizer) = 
+let number (s: Tokenizer) =
     let from = s.from
     let ok x = ({from=from; nearTo=s.from}, x) |> Ok
 
-    let parser (s: Tokenizer) = 
-        if peek s = '-' && Char.IsDigit (peek' s 1) && is_prefix_separator_char (peek' s -1) then 
+    let parser (s: Tokenizer) =
+        if peek s = '-' && Char.IsDigit (peek' s 1) && is_prefix_separator_char (peek' s -1) then
             inc s
-            number_fractional s |> Result.map (function 
+            number_fractional s |> Result.map (function
                 | (a,Some b) -> sprintf "-%s.%s" a b
                 | (a,None) -> "-"+a)
-        else number_fractional s |> Result.map (function 
+        else number_fractional s |> Result.map (function
                 | (a,Some b) -> sprintf "%s.%s" a b
                 | (a,None) -> a)
-    
+
     let followedBySuffix x (s: Tokenizer) =
         let inline safe_parse string_to_val val_to_lit val_dsc =
-            if is_separator_char (peek s) then 
+            if is_separator_char (peek s) then
                 match string_to_val x with
                 | true, x -> val_to_lit x |> TokValue |> ok
                 | false, _ -> Error [{from=from; nearTo=s.from}, (sprintf "The string %s cannot be safely parsed as %s." x val_dsc)]
@@ -195,7 +195,7 @@ let symbol s =
     else error_char from "symbol"
 
 let comment (s : Tokenizer) =
-    if peek s = '/' && peek' s 1 = '/' then 
+    if peek s = '/' && peek' s 1 = '/' then
         let from = s.from
         inc' 2 s
         skip ' ' s (fun () ->
@@ -206,11 +206,11 @@ let comment (s : Tokenizer) =
     else
         error_char s.from "comment"
 
-let operator (s : Tokenizer) = 
+let operator (s : Tokenizer) =
     let from = s.from
     let ok x = ({from=from; nearTo=s.from}, x) |> Ok
     let is_separator_prev = is_prefix_separator_char (peek' s -1)
-    let f name (s: Tokenizer) = 
+    let f name (s: Tokenizer) =
         if is_separator_prev && (is_postfix_separator_char (peek s) = false) then TokUnaryOperator(name) |> ok
         else TokOperator(name) |> ok
     (many1SatisfyL is_operator_char "operator"  >>= f .>> spaces) s
@@ -220,14 +220,14 @@ let string_raw s =
     let f x = {from=from; nearTo=s.from}, TokValue(LitString x)
     (skip_string "@\"" >>. chars_till_string "\"" |>> f .>> spaces) s
 
-let char_quoted s = 
+let char_quoted s =
     let char_quoted_body (s: Tokenizer) =
         let inline read on_succ =
             let x = peek s
             if x <> eol then inc s; on_succ x
             else error_char s.from "character or '"
         read (function
-            | '\\' -> 
+            | '\\' ->
                 read (Ok << function
                     | 'n' -> '\n'
                     | 'r' -> '\r'
@@ -240,7 +240,7 @@ let char_quoted s =
     let f _ x _ = {from=from; nearTo=s.from}, TokValue(LitChar x)
     (pipe3 (skip_char '\'') char_quoted_body (skip_char '\'') f .>> spaces) s
 
-let string_quoted s = 
+let string_quoted s =
     let string_quoted_body (s: Tokenizer) =
         let inline read on_succ =
             let x = peek s
@@ -248,7 +248,7 @@ let string_quoted s =
             else error_char s.from "character or \""
         let rec loop (b : StringBuilder) =
             read (function
-                | '\\' -> 
+                | '\\' ->
                     read (function
                         | 'n' -> '\n'
                         | 'r' -> '\r'
@@ -280,7 +280,7 @@ let token s =
 /// An array of {line: int; char: int; length: int; tokenType: int; tokenModifiers: int} in the order as written suitable for serialization.
 type VSCTokenArray = int []
 open Config
-let process_error (k,v) = 
+let process_error (k,v) =
     let messages, expecteds = v |> Array.distinct |> Array.partition (fun x -> Char.IsUpper(x,0))
     let ex () = match expecteds with [|x|] -> sprintf "Expected: %s" x | x -> sprintf "Expected one of: %s" (String.concat ", " x)
     let f l = String.concat "\n" l
@@ -290,7 +290,7 @@ let process_error (k,v) =
 
 type LineTokenErrors = (Range * TokenizerError) list
 let process_errors line (ers : LineTokenErrors []) : (string * VSCRange) [] =
-    ers |> Array.mapi (fun i l -> 
+    ers |> Array.mapi (fun i l ->
         let i = line + i
         l |> List.toArray |> Array.map (fun (r,x) -> x, ({line=i; character=r.from}, {line=i; character=r.nearTo}))
         )
@@ -332,7 +332,7 @@ let vscode_tokens line_delta (lines : LineToken [] []) =
         |> fst |> ((+) 1)
         ) line_delta
     |> ignore
-    
+
     toks.ToArray()
 
 type SpiEdit = {|from: int; nearTo: int; lines: string []|}

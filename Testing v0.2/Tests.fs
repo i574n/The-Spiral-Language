@@ -207,7 +207,7 @@ let test12: SpiralModule =
     code=
     """
 inl main _ =
-    inl f x = 
+    inl f x =
         match x with
         | 0 -> "0", x
         | 1 -> "1", x
@@ -291,7 +291,7 @@ let test17: SpiralModule =
     """
 inl main _ =
     inl m = rjp_heap { a=dyn 1; b=dyn 2 }
-    inl add c d = 
+    inl add c d =
         inl {a b} = rjp_none m
         a + b + c + d
     inl f g c d = join g c d
@@ -345,7 +345,7 @@ inl main _ =
     inl f {name p={x y}} = name,(x,y)
     inl x = { name = "Coord" }
 
-    f {x with 
+    f {x with
         p = { x = 1
               y = 2 }}
     |> dyn
@@ -362,7 +362,7 @@ let test21: SpiralModule =
 inl main _ =
     inl f {name p={y=y' x=x'}} = name,(x',y')
     inl x = { name = "Coord" }
-    f {x with 
+    f {x with
         p = { x = 1
               y = 2 }}
     |> dyn
@@ -429,8 +429,9 @@ let test25: SpiralModule =
     code=
     """
 inl main _ =
-    inl a,b,c,d,e = dyn (true, false, true, false, true)
-    a && b || c && d || e
+    inl a,b,c,d,e = true, false, true, false, true
+    inl x = a && b || c && d || e
+    dyn x
 
 //let ((var_0 : bool)) = true
 //let ((var_1 : bool)) = false
@@ -557,7 +558,7 @@ inl main _ =
     inl f x =
         match x with
         | q,w,e,r,t,z,x,c,v,b,m -> 0
-        | (((),a,b) | ({q w e r t y z a b}, _, _)) -> 
+        | (((),a,b) | ({q w e r t y z a b}, _, _)) ->
             inl f a b = !!!!Add(a, b)
             f a b
         | a,b -> !!!!Add(a, b)
@@ -621,7 +622,7 @@ let test37: SpiralModule =
     """
 inl main _ =
     dyn
-        {a=1; b=2; 
+        {a=1; b=2;
          c=3}
     """
     }
@@ -669,8 +670,8 @@ let test40: SpiralModule =
 inl main _ =
     inl add left:right: = left + right
     add left:1 right: 2
-    + add 
-        left: 3 
+    + add
+        left: 3
         right: 7
     |> dyn
     """
@@ -689,7 +690,7 @@ inl main _ =
     """
     }
 
-output_test_to_temp cfg (Path.Combine(__SOURCE_DIRECTORY__ , @"..\Temporary\output.fs")) test40
+output_test_to_temp cfg (Path.Combine(__SOURCE_DIRECTORY__ , @"..\Temporary\output.fs")) test34
 |> printfn "%s"
 |> ignore
 
