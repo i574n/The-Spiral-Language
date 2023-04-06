@@ -216,6 +216,7 @@ type BuildResult =
     | BuildOk of code: string * file_extension : string
     | BuildErrorTrace of string list * string
     | BuildFatalError of string
+    | BuildSkip
 
 let dir uri = FileInfo(Uri(uri).LocalPath).Directory.FullName
 let file uri = FileInfo(Uri(uri).LocalPath).FullName
@@ -352,6 +353,9 @@ let supervisor_server atten (errors : SupervisorErrorSources) req =
                 | BuildOk(x,ext) -> Job.fromUnitTask (fun () -> IO.File.WriteAllTextAsync(IO.Path.ChangeExtension(file,ext), x))
                 | BuildFatalError x -> Ch.send errors.fatal x
                 | BuildErrorTrace(a,b) -> Ch.send errors.traced {|trace=a; message=b|}
+                | BuildSkip ->
+                    printfn $"Build skipped for {file}"
+                    Job.unit ()
             let file_build (s : SupervisorState) mid (tc : WDiff.ProjStateTC, prepass : WDiffPrepass.ProjStatePrepass) =
                 printfn $"Building {file}"
                 let a,b = tc.files.uids_file.[mid]
@@ -380,7 +384,10 @@ let supervisor_server atten (errors : SupervisorErrorSources) req =
                             | :? PartEval.Main.TypeError as e -> BuildErrorTrace(show_trace s e.Data0 e.Data1)
                             | :? CodegenUtils.CodegenError as e -> BuildFatalError(e.Data1)
                             | :? CodegenUtils.CodegenErrorWithPos as e -> BuildErrorTrace(show_trace s e.Data0 e.Data1)
-                    | None -> BuildFatalError $"Cannot find `main` in file {Path.GetFileNameWithoutExtension file}."
+                    | None ->
+                        // BuildFatalError $"Cannot find `main` in file {Path.GetFileNameWithoutExtension file}."
+                        printfn $"Cannot find `main` in file {Path.GetFileNameWithoutExtension file}."
+                        BuildSkip
                     |> handle_build_result
                     )
             let file_find (s : SupervisorState) pdir =
