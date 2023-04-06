@@ -353,6 +353,7 @@ let supervisor_server atten (errors : SupervisorErrorSources) req =
                 | BuildFatalError x -> Ch.send errors.fatal x
                 | BuildErrorTrace(a,b) -> Ch.send errors.traced {|trace=a; message=b|}
             let file_build (s : SupervisorState) mid (tc : WDiff.ProjStateTC, prepass : WDiffPrepass.ProjStatePrepass) =
+                printfn $"Building {file}"
                 let a,b = tc.files.uids_file.[mid]
                 let x,_ = prepass.files.uids_file.[mid]
                 Hopac.start (a.state >>= fun (has_error',_) ->
@@ -493,8 +494,12 @@ let [<EntryPoint>] main args =
         let msg = server.ReceiveMultipartMessage(3)
         let address = msg.Pop()
         msg.Pop() |> ignore
-        let x = Json.deserialize(Text.Encoding.Default.GetString(msg.Pop().Buffer))
-        let push_back (x : obj) = 
+        let json = msg.Pop().Buffer
+        let x = Json.deserialize(Text.Encoding.Default.GetString(json))
+        // match x with
+        // | Ping _ -> ()
+        // | _ -> printfn $"Received: {Text.Encoding.Default.GetString(json)}"
+        let push_back (x : obj) =
             match x with
             | :? Option<string> as x -> 
                 match x with
@@ -526,6 +531,7 @@ let [<EntryPoint>] main args =
     client.Bind(uri_client)
 
     printfn "Server bound to: %s & %s" uri_server uri_client
+    printfn $"pwd: {System.Environment.CurrentDirectory}"
 
     use __ = queue_client.ReceiveReady.Subscribe(fun x -> 
         x.Queue.Dequeue() |> Json.serialize |> client.SendFrame
