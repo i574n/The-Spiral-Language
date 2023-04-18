@@ -2,6 +2,9 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <TargetFramework>net7.0</TargetFramework>
+    <LangVersion>preview</LangVersion>
+    <RollForward>Major</RollForward>
+    <TargetLatestRuntimePatch>true</TargetLatestRuntimePatch>
     <RootNamespace>The_Spiral_Language_2</RootNamespace>
     <OutputType>Exe</OutputType>
     <ServerGarbageCollection>true</ServerGarbageCollection>
@@ -53,15 +56,16 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="FParsec" Version="1.1.1" />
-    <PackageReference Include="FSharp.Json" Version="0.4.0" />
-    <PackageReference Include="FSharpx.Collections" Version="2.1.3" />
-    <PackageReference Include="Hopac" Version="0.5.0" />
-    <PackageReference Include="NetMQ" Version="4.0.1.6" />
+    <PackageReference Include="FParsec" Version="2.0.0-beta2" />
+    <PackageReference Include="FSharp.Json" Version="0.4.1" />
+    <PackageReference Include="FSharpx.Collections" Version="3.1.0" />
+    <PackageReference Include="Hopac" Version="0.5.1" />
+    <PackageReference Include="NetMQ" Version="4.0.1.12" />
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Update="FSharp.Core" Version="5.0.0" />
+    <PackageReference Update="FSharp.Core" Version="7.0.300-beta.23176.1" />
   </ItemGroup>
+  <Import Project="..\..\..\.paket\Paket.Restore.targets" />
 
 </Project>
