@@ -497,15 +497,24 @@ let [<EntryPoint>] main args =
         )
     #endif
 
+    let dll_path = System.Reflection.Assembly.GetExecutingAssembly().Location |> System.IO.Path.GetDirectoryName
+    let log_dir = Path.Combine (dll_path, "log", "supervisor")
+    if Directory.Exists log_dir then Directory.Delete (log_dir, true)
+    Directory.CreateDirectory log_dir |> ignore
+
     use __ = server.ReceiveReady.Subscribe(fun s ->
         let msg = server.ReceiveMultipartMessage(3)
         let address = msg.Pop()
         msg.Pop() |> ignore
         let json = msg.Pop().Buffer
         let x = Json.deserialize(Text.Encoding.Default.GetString(json))
-        // match x with
-        // | Ping _ -> ()
-        // | _ -> printfn $"Received: {Text.Encoding.Default.GetString(json)}"
+        match x with
+        | Ping _ -> ()
+        | _ ->
+            let req_name = x.GetType().Name
+            let log_file = Path.Combine (log_dir, $"{DateTimeOffset.Now:yyyy_MM_dd_HH_mm_ss_fff}_{req_name}.json")
+            File.WriteAllText (log_file, Text.Encoding.Default.GetString json)
+
         let push_back (x : obj) =
             match x with
             | :? Option<string> as x -> 
@@ -539,6 +548,7 @@ let [<EntryPoint>] main args =
 
     printfn "Server bound to: %s & %s" uri_server uri_client
     printfn $"pwd: {System.Environment.CurrentDirectory}"
+    printfn $"dll_path: {dll_path}"
 
     use __ = queue_client.ReceiveReady.Subscribe(fun x -> 
         x.Queue.Dequeue() |> Json.serialize |> client.SendFrame
