@@ -489,21 +489,39 @@ let [<EntryPoint>] main args =
 
     let mutable time = DateTimeOffset.Now
     #if !DEBUG 
-    let timer = NetMQTimer(2000)
+    let timer = NetMQTimer(5000)
     poller.Add(timer)
     timer.EnableAndReset()
     use __ = timer.Elapsed.Subscribe(fun _ ->
-        if TimeSpan.FromSeconds(2.0) < DateTimeOffset.Now - time then poller.Stop()
+        if TimeSpan.FromSeconds(5.0) < DateTimeOffset.Now - time then poller.Stop()
         )
     #endif
 
     let dll_path = System.Reflection.Assembly.GetExecutingAssembly().Location |> System.IO.Path.GetDirectoryName
-    let log_dir = Path.Combine (dll_path, "log", "supervisor")
+    let log_dir = clr.Operators.(</>) (clr.Operators.(</>) dll_path "log") "supervisor"
     // if Directory.Exists log_dir then Directory.Delete (log_dir, true)
     // Directory.CreateDirectory log_dir |> ignore
     if Directory.Exists log_dir then
         Directory.EnumerateFiles log_dir |> Seq.iter File.Delete
         Directory.EnumerateDirectories log_dir |> Seq.iter (fun dir -> Directory.Delete (dir, true))
+
+        clr.Logger.init ()
+        let stream, disposable = clr.FileSystem.watch log_dir
+
+        let stream =
+            stream
+            |> FSharp.Control.AsyncSeq.iterAsync
+                    (fun (ticks, event) ->
+                        async {
+                            let getLocals () =
+                                $"ticks={ticks} event={event} {clr.CoreMagic.getLocals ()}"
+
+                            clr.Logger.logTrace (fun () -> "Stream.withFileWatcher / fn") getLocals
+                        })
+
+        stream
+        |> Async.StartImmediate
+
 
     use __ = server.ReceiveReady.Subscribe(fun s ->
         let msg = server.ReceiveMultipartMessage(3)
@@ -516,7 +534,7 @@ let [<EntryPoint>] main args =
         | _ ->
             if Directory.Exists log_dir then
             let req_name = x.GetType().Name
-            let log_file = Path.Combine (log_dir, $"{DateTimeOffset.Now:yyyy_MM_dd_HH_mm_ss_fff}_{req_name}.json")
+            let log_file = clr.Operators.(</>) log_dir $"{DateTimeOffset.Now:yyyy_MM_dd_HH_mm_ss_fff}_{req_name}.json"
             File.WriteAllText (log_file, Text.Encoding.Default.GetString json)
 
         let push_back (x : obj) =
