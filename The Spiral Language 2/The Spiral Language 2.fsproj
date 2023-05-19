@@ -52,7 +52,8 @@
     <Compile Include="SpiProj.fs" />
     <Compile Include="Graph.fs" />
     <Compile Include="ServerUtils.fs" />
-    <Compile Include="../../clr/clr.fsx" />
+    <Compile Include="../../clr/clr.fsx" Condition="Exists('../../clr/clr.fsx')" />
+    <Compile Include="../../polyglot/spiral/clr/clr.fsx" Condition="!Exists('../../clr/clr.fsx')" />
     <Compile Include="Supervisor.fs" />
   </ItemGroup>
 
