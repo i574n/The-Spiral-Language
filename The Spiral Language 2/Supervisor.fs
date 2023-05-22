@@ -497,49 +497,10 @@ let [<EntryPoint>] main args =
         )
     #endif
 
-    let dll_path = System.Reflection.Assembly.GetExecutingAssembly().Location |> System.IO.Path.GetDirectoryName
-    let log_dir = clr.Operators.(</>) (clr.Operators.(</>) dll_path "log") "supervisor"
-    // if Directory.Exists log_dir then Directory.Delete (log_dir, true)
-    // Directory.CreateDirectory log_dir |> ignore
-    if Directory.Exists log_dir then
-        Directory.EnumerateFiles log_dir |> Seq.iter File.Delete
-        Directory.EnumerateDirectories log_dir |> Seq.iter (fun dir -> Directory.Delete (dir, true))
-
-        clr.Logger.init ()
-        let stream, disposable = clr.FileSystem.watch log_dir
-
-        let stream =
-            stream
-            |> FSharp.Control.AsyncSeq.iterAsync
-                    (fun (ticks, event) ->
-                        async {
-                            let getLocals () =
-                                $"ticks={ticks} event={event} {clr.CoreMagic.getLocals ()}"
-
-                            clr.Logger.logTrace (fun () -> "Stream.withFileWatcher / fn") getLocals
-                        })
-
-        stream
-        |> Async.StartImmediate
-
-
-    use __ = server.ReceiveReady.Subscribe(fun s ->
-        let msg = server.ReceiveMultipartMessage(3)
-        let address = msg.Pop()
-        msg.Pop() |> ignore
-        let json = msg.Pop().Buffer
-        let x = Json.deserialize (Text.Encoding.Default.GetString json)
-        match x with
-        | Ping _ -> ()
-        | _ ->
-            if Directory.Exists log_dir then
-            let req_name = x.GetType().Name
-            let log_file = clr.Operators.(</>) log_dir $"{DateTimeOffset.Now:yyyy_MM_dd_HH_mm_ss_fff}_{req_name}.json"
-            File.WriteAllText (log_file, Text.Encoding.Default.GetString json)
-
+    let run (address : NetMQFrame) (msg : NetMQMessage) (x : ClientReq) =
         let push_back (x : obj) =
             match x with
-            | :? Option<string> as x -> 
+            | :? Option<string> as x ->
                 match x with
                 | Some x -> msg.Push(x)
                 | None -> msg.PushEmptyFrame()
@@ -563,7 +524,54 @@ let [<EntryPoint>] main args =
         | BuildFile x -> job_null (supervisor *<+ SupervisorReq.BuildFile x)
         | Ping _ -> send_back null
         time <- DateTimeOffset.Now
-        )
+
+    let dll_path = System.Reflection.Assembly.GetExecutingAssembly().Location |> System.IO.Path.GetDirectoryName
+    let log_dir = clr.Operators.(</>) (clr.Operators.(</>) dll_path "log") "supervisor"
+    // if Directory.Exists log_dir then Directory.Delete (log_dir, true)
+    // Directory.CreateDirectory log_dir |> ignore
+    if Directory.Exists log_dir then
+        Directory.EnumerateFiles log_dir |> Seq.iter File.Delete
+        Directory.EnumerateDirectories log_dir |> Seq.iter (fun dir -> Directory.Delete (dir, true))
+
+        clr.Logger.init ()
+        let stream, disposable = clr.FileSystem.watch log_dir
+
+            stream
+        |> FSharp.Control.AsyncSeq.iterAsyncParallel (fun (ticks, fsEvent) -> async {
+            let getLocals () = $"ticks={ticks} event={fsEvent} {clr.CoreMagic.getLocals ()}"
+
+            match fsEvent with
+            | clr.FileSystem.FileSystemChange.Created path ->
+                clr.Logger.logTrace (fun () -> "clr.FileSystem.watch 'Created") getLocals
+                let fullPath = clr.Operators.(</>) log_dir (path.TrimStart [|'\\'; '/' |])
+                let json = File.ReadAllText fullPath
+                let x = Json.deserialize json
+                Async.StartImmediate (async {
+                    run (NetMQFrame.Empty) (NetMQMessage()) x
+                    File.Delete fullPath
+                })
+                ()
+            | _ -> clr.Logger.logTrace (fun () -> "clr.FileSystem.watch 'iterAsync") getLocals
+                        })
+        |> Async.StartImmediate
+
+
+    use __ = server.ReceiveReady.Subscribe(fun s ->
+        let msg = server.ReceiveMultipartMessage(3)
+        let address = msg.Pop()
+        msg.Pop() |> ignore
+        let json = msg.Pop().Buffer
+        let json = Text.Encoding.Default.GetString json
+        let x = Json.deserialize json
+        match x with
+        | Ping _ -> ()
+        | _ ->
+            if Directory.Exists log_dir then
+            let req_name = x.GetType().Name
+            let log_file = clr.Operators.(</>) log_dir $"{DateTimeOffset.Now:yyyy_MM_dd_HH_mm_ss_fff}_{req_name}.json"
+                File.WriteAllText (log_file, json)
+
+        run address msg x)
 
     use client = new PublisherSocket()
     client.Bind(uri_client)
