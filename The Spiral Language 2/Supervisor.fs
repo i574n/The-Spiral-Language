@@ -536,7 +536,7 @@ let [<EntryPoint>] main args =
         clr.Logger.init ()
         let stream, disposable = clr.FileSystem.watch log_dir
 
-            stream
+        stream
         |> FSharp.Control.AsyncSeq.iterAsyncParallel (fun (ticks, fsEvent) -> async {
             let getLocals () = $"ticks={ticks} event={fsEvent} {clr.CoreMagic.getLocals ()}"
 
@@ -546,13 +546,13 @@ let [<EntryPoint>] main args =
                 let fullPath = clr.Operators.(</>) log_dir (path.TrimStart [|'\\'; '/' |])
                 let json = File.ReadAllText fullPath
                 let x = Json.deserialize json
-                Async.StartImmediate (async {
-                    run (NetMQFrame.Empty) (NetMQMessage()) x
-                    File.Delete fullPath
-                })
-                ()
+                async {
+                    x |> run (NetMQFrame.Empty) (NetMQMessage())
+                    fullPath |> File.Delete
+                }
+                |> Async.StartImmediate
             | _ -> clr.Logger.logTrace (fun () -> "clr.FileSystem.watch 'iterAsync") getLocals
-                        })
+        })
         |> Async.StartImmediate
 
 
@@ -569,7 +569,7 @@ let [<EntryPoint>] main args =
             if Directory.Exists log_dir then
             let req_name = x.GetType().Name
             let log_file = clr.Operators.(</>) log_dir $"{DateTimeOffset.Now:yyyy_MM_dd_HH_mm_ss_fff}_{req_name}.json"
-                File.WriteAllText (log_file, json)
+            File.WriteAllText (log_file, json)
 
         run address msg x)
 
