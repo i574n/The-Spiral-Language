@@ -9,12 +9,9 @@
 	"publisher": "mrakgr",
 	"author": "Marko Grdinić",
 	"engines": {
-		"vscode": "^1.59.0"
+		"vscode": "^1.77.0"
 	},
 	"main": "out/index.js",
-	"activationEvents": [
-		"onLanguage:spiral"
-	],
 	"contributes": {
 		"configuration": {
 			"title": "Spiral Configuration",
@@ -116,11 +113,12 @@
 		"spiral"
 	],
 	"devDependencies": {
-		"@types/node": "^14.17.9",
-		"@types/vscode": "^1.59.0",
-		"typescript": "^4.3.5"
+		"@types/node": "~20.2",
+		"@types/vscode": "~1.77",
+		"typescript": "~5.0",
+		"@vscode/vsce": "~2.19"
 	},
 	"dependencies": {
-		"zeromq": "^6.0.0-beta.6"
+		"zeromq": "~6.0.0-beta.16"
 	}
 }

@@ -434,6 +434,7 @@ type ClientReq =
     | HoverAt of {|uri : string; pos : VSCPos|}
     | BuildFile of {|uri : string; backend : string|}
     | Ping of bool
+    | Exit of bool
 
 type ClientErrorsRes =
     | FatalError of string
@@ -489,15 +490,19 @@ let [<EntryPoint>] main args =
 
     let mutable time = DateTimeOffset.Now
     #if !DEBUG 
-    let timer = NetMQTimer(5000)
+    let timer = NetMQTimer(10000)
     poller.Add(timer)
     timer.EnableAndReset()
     use __ = timer.Elapsed.Subscribe(fun _ ->
-        if TimeSpan.FromSeconds(5.0) < DateTimeOffset.Now - time then poller.Stop()
+        if TimeSpan.FromSeconds(10.0) < DateTimeOffset.Now - time then poller.Stop()
         )
     #endif
 
-    let run (address : NetMQFrame) (msg : NetMQMessage) (x : ClientReq) =
+    let dll_path = System.Reflection.Assembly.GetExecutingAssembly().Location |> System.IO.Path.GetDirectoryName
+    let log_dir = clr.Operators.(</>) (clr.Operators.(</>) dll_path "log") "supervisor"
+    let old_dir = clr.Operators.(</>) log_dir "../old"
+
+    let run (address : NetMQFrame) (msg : NetMQMessage) (path : string option) (x : ClientReq) =
         let push_back (x : obj) =
             match x with
             | :? Option<string> as x ->
@@ -523,17 +528,30 @@ let [<EntryPoint>] main args =
         | HoverAt x -> job_val (fun res -> supervisor *<+ SupervisorReq.HoverAt(x,res))
         | BuildFile x -> job_null (supervisor *<+ SupervisorReq.BuildFile x)
         | Ping _ -> send_back null
+        | Exit _ ->
+            async {
+                printfn "Exiting..."
+                do! Async.Sleep 1000
+                System.Environment.Exit 0
+                // System.Diagnostics.Process.GetCurrentProcess().Kill()
+            }
+            |> Async.Start
+            send_back null
         time <- DateTimeOffset.Now
+        match path with
+        | Some path ->
+            let fullPath = clr.Operators.(</>) log_dir (path.TrimStart [|'\\'; '/' |])
+            let oldPath = clr.Operators.(</>) old_dir (path.TrimStart [|'\\'; '/' |])
+            File.Move (fullPath, oldPath)
+        | None -> ()
 
-    let dll_path = System.Reflection.Assembly.GetExecutingAssembly().Location |> System.IO.Path.GetDirectoryName
-    let log_dir = clr.Operators.(</>) (clr.Operators.(</>) dll_path "log") "supervisor"
-    // if Directory.Exists log_dir then Directory.Delete (log_dir, true)
-    // Directory.CreateDirectory log_dir |> ignore
     if Directory.Exists log_dir then
+        clr.Logger.init ()
+
         Directory.EnumerateFiles log_dir |> Seq.iter File.Delete
         Directory.EnumerateDirectories log_dir |> Seq.iter (fun dir -> Directory.Delete (dir, true))
+        if not <| Directory.Exists old_dir then Directory.CreateDirectory old_dir |> ignore
 
-        clr.Logger.init ()
         let stream, disposable = clr.FileSystem.watch log_dir
 
         stream
@@ -544,13 +562,13 @@ let [<EntryPoint>] main args =
             | clr.FileSystem.FileSystemChange.Created path ->
                 clr.Logger.logTrace (fun () -> "clr.FileSystem.watch 'Created") getLocals
                 let fullPath = clr.Operators.(</>) log_dir (path.TrimStart [|'\\'; '/' |])
-                let json = File.ReadAllText fullPath
-                let x = Json.deserialize json
-                async {
-                    x |> run (NetMQFrame.Empty) (NetMQMessage())
-                    fullPath |> File.Delete
-                }
-                |> Async.StartImmediate
+                if File.Exists fullPath then
+                    let json = File.ReadAllText fullPath
+                    let x = Json.deserialize json
+                    async {
+                        x |> run (NetMQFrame.Empty) (NetMQMessage()) (Some path)
+                    }
+                    |> Async.Start
             | _ -> clr.Logger.logTrace (fun () -> "clr.FileSystem.watch 'iterAsync") getLocals
         })
         |> Async.StartImmediate
@@ -567,11 +585,11 @@ let [<EntryPoint>] main args =
         | Ping _ -> ()
         | _ ->
             if Directory.Exists log_dir then
-            let req_name = x.GetType().Name
-            let log_file = clr.Operators.(</>) log_dir $"{DateTimeOffset.Now:yyyy_MM_dd_HH_mm_ss_fff}_{req_name}.json"
-            File.WriteAllText (log_file, json)
+                let req_name = x.GetType().Name
+                let log_file = clr.Operators.(</>) log_dir $"{DateTimeOffset.Now:yyyy_MM_dd_HH_mm_ss_fff}_{req_name}.json"
+                File.WriteAllText (log_file, json)
 
-        run address msg x)
+        run address msg None x)
 
     use client = new PublisherSocket()
     client.Bind(uri_client)
