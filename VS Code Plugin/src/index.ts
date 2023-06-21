@@ -204,7 +204,7 @@ export const activate = async (ctx: ExtensionContext) => {
     let serverStop = (next : () => void) => {next()}
     const startServer = (hideFromUser: boolean) => {
         serverStop(() => {
-            const terminal = window.createTerminal({name: "Spiral Server", hideFromUser})
+            const terminal = window.createTerminal({name: "Spiral Server*", hideFromUser})
             const compiler_path = path.join(__dirname,"../compiler/Spiral.dll")
             terminal.sendText(`dotnet "${compiler_path}" port=${port}`)
             let isProcessing = true;
@@ -235,7 +235,7 @@ export const activate = async (ctx: ExtensionContext) => {
                     } catch (e) {
                         if ((e as any).errno === 11) { } // If the error is a timeout just repeat.
                         else { 
-                            window.showErrorMessage(`Spiral: Fatal error in the subscriber socket. Aborting...\nMessage: ${(e as any).message}`)
+                            window.showErrorMessage(`Spiral: Fatal error in the subscriber socket. Aborting...\nMessage: '${(e as any).message}'`)
                             isProcessing = false
                         }
                     }
