@@ -448,6 +448,9 @@ open FSharp.Json
 open NetMQ
 open NetMQ.Sockets
 
+open Polyglot
+open Polyglot.Common
+
 let [<EntryPoint>] main args =
     let env_def = {|
         port = 13805
@@ -499,8 +502,10 @@ let [<EntryPoint>] main args =
     #endif
 
     let dll_path = System.Reflection.Assembly.GetExecutingAssembly().Location |> System.IO.Path.GetDirectoryName
-    let log_dir = clr.Operators.(</>) (clr.Operators.(</>) dll_path "log") "supervisor"
-    let old_dir = clr.Operators.(</>) log_dir "../old"
+    let supervisor_dir = dll_path </> "supervisor"
+    let trace_dir = supervisor_dir </> "trace"
+    let commands_dir = supervisor_dir </> "commands"
+    let old_dir = supervisor_dir </> "old"
 
     let run (address : NetMQFrame) (msg : NetMQMessage) (path : string option) (x : ClientReq) =
         let push_back (x : obj) =
@@ -540,28 +545,27 @@ let [<EntryPoint>] main args =
         time <- DateTimeOffset.Now
         match path with
         | Some path ->
-            let fullPath = clr.Operators.(</>) log_dir (path.TrimStart [|'\\'; '/' |])
-            let oldPath = clr.Operators.(</>) old_dir (path.TrimStart [|'\\'; '/' |])
+            let fullPath = commands_dir </> path
+            let oldPath = old_dir </> path
             File.Move (fullPath, oldPath)
         | None -> ()
 
-    if Directory.Exists log_dir then
-        clr.Logger.init ()
+    if Directory.Exists supervisor_dir then
+        [trace_dir; commands_dir; old_dir]
+        |> List.iter (fun dir -> if Directory.Exists dir |> not then Directory.CreateDirectory dir |> ignore)
 
-        Directory.EnumerateFiles log_dir |> Seq.iter File.Delete
-        Directory.EnumerateDirectories log_dir |> Seq.iter (fun dir -> Directory.Delete (dir, true))
-        if not <| Directory.Exists old_dir then Directory.CreateDirectory old_dir |> ignore
+        Directory.EnumerateFiles commands_dir |> Seq.iter File.Delete
 
-        let stream, disposable = clr.FileSystem.watch log_dir
+        let stream, disposable = FileSystem.watch commands_dir
 
         stream
-        |> FSharp.Control.AsyncSeq.iterAsyncParallel (fun (ticks, fsEvent) -> async {
-            let getLocals () = $"ticks={ticks} event={fsEvent} {clr.CoreMagic.getLocals ()}"
+        |> FSharp.Control.AsyncSeq.iterAsyncParallel (fun (ticks, event) -> async {
+            let getLocals () = $"ticks: {ticks} / event: {event} / {getLocals ()}"
+            trace Verbose (fun () -> "FileSystem.watch") getLocals
 
-            match fsEvent with
-            | clr.FileSystem.FileSystemChange.Created path ->
-                clr.Logger.logTrace (fun () -> "clr.FileSystem.watch 'Created") getLocals
-                let fullPath = clr.Operators.(</>) log_dir (path.TrimStart [|'\\'; '/' |])
+            match event with
+            | FileSystem.FileSystemChange.Created path ->
+                let fullPath = commands_dir </> path
                 if File.Exists fullPath then
                     let json = File.ReadAllText fullPath
                     let x = Json.deserialize json
@@ -569,7 +573,7 @@ let [<EntryPoint>] main args =
                         x |> run (NetMQFrame.Empty) (NetMQMessage()) (Some path)
                     }
                     |> Async.Start
-            | _ -> clr.Logger.logTrace (fun () -> "clr.FileSystem.watch 'iterAsync") getLocals
+            | _ -> ()
         })
         |> Async.StartImmediate
 
@@ -584,10 +588,10 @@ let [<EntryPoint>] main args =
         match x with
         | Ping _ -> ()
         | _ ->
-            if Directory.Exists log_dir then
+            if Directory.Exists trace_dir then
                 let req_name = x.GetType().Name
-                let log_file = clr.Operators.(</>) log_dir $"{DateTimeOffset.Now:yyyy_MM_dd_HH_mm_ss_fff}_{req_name}.json"
-                File.WriteAllText (log_file, json)
+                let trace_file = trace_dir </> $"{DateTimeOffset.Now:yyyy_MM_dd_HH_mm_ss_fff}_{req_name}.json"
+                File.WriteAllText (trace_file, json)
 
         run address msg None x)
 
