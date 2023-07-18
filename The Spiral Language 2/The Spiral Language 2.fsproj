@@ -73,7 +73,6 @@
     <PackageReference Include="NetMQ" Version="4.0.1.12" />
 
     <PackageReference Include="FSharp.Control.AsyncSeq" Version="3.2.1" />
-    <PackageReference Include="Serilog.Sinks.SpectreConsole" Version="0.3.3" />
     <PackageReference Include="System.Reactive.Linq" Version="6.0.0-preview.16" />
   </ItemGroup>
 
