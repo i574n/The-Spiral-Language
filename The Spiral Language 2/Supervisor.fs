@@ -556,7 +556,7 @@ let [<EntryPoint>] main args =
 
         Directory.EnumerateFiles commands_dir |> Seq.iter File.Delete
 
-        let stream, disposable = FileSystem.watch commands_dir
+        let stream, disposable = FileSystem.watch false commands_dir
 
         stream
         |> FSharp.Control.AsyncSeq.iterAsyncParallel (fun (ticks, event) -> async {
@@ -564,7 +564,7 @@ let [<EntryPoint>] main args =
             trace Verbose (fun () -> "FileSystem.watch") getLocals
 
             match event with
-            | FileSystem.FileSystemChange.Created path ->
+            | FileSystem.FileSystemChange.Created (path, _) ->
                 let fullPath = commands_dir </> path
                 if File.Exists fullPath then
                     let json = File.ReadAllText fullPath
