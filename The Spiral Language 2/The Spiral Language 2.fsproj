@@ -62,6 +62,9 @@
     <Compile Include="../../../nbs/AsyncSeq.fs" Condition="Exists('../../../nbs/AsyncSeq.fs')" />
     <Compile Include="../../polyglot/nbs/AsyncSeq.fs" Condition="!Exists('../../../nbs/AsyncSeq.fs')" />
 
+    <Compile Include="../../../nbs/Runtime.fs" Condition="Exists('../../../nbs/Runtime.fs')" />
+    <Compile Include="../../polyglot/nbs/Runtime.fs" Condition="!Exists('../../../nbs/Runtime.fs')" />
+
     <Compile Include="../../../nbs/FileSystem.fs" Condition="Exists('../../../nbs/FileSystem.fs')" />
     <Compile Include="../../polyglot/nbs/FileSystem.fs" Condition="!Exists('../../../nbs/FileSystem.fs')" />
 
