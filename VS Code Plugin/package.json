@@ -113,10 +113,10 @@
 		"spiral"
 	],
 	"devDependencies": {
-		"@types/node": "~20.3",
+		"@types/node": "~20.4",
 		"@types/vscode": "~1.77",
-		"typescript": "~5.0",
-		"@vscode/vsce": "~2.19"
+		"typescript": "~5.1",
+		"@vscode/vsce": "~2.20"
 	},
 	"dependencies": {
 		"zeromq": "~6.0.0-beta.17"

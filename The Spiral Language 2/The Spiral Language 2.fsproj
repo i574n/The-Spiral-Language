@@ -78,7 +78,9 @@
     <PackageReference Include="Hopac" Version="0.5.1" />
     <PackageReference Include="NetMQ" Version="4.0.1.12" />
 
+    <PackageReference Include="Argu" Version="6.1.1" />
     <PackageReference Include="FSharp.Control.AsyncSeq" Version="3.2.1" />
+    <PackageReference Include="System.CommandLine" Version="2.0.0-beta4.22272.1" />
     <PackageReference Include="System.Reactive.Linq" Version="6.0.0-preview.16" />
   </ItemGroup>
 
