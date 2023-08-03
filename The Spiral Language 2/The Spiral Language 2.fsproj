@@ -56,6 +56,9 @@
     <Compile Include="../../../nbs/Common.fs" Condition="Exists('../../../nbs/Common.fs')" />
     <Compile Include="../../polyglot/nbs/Common.fs" Condition="!Exists('../../../nbs/Common.fs')" />
 
+    <Compile Include="../../../nbs/CommonFSharp.fs" Condition="Exists('../../../nbs/CommonFSharp.fs')" />
+    <Compile Include="../../polyglot/nbs/CommonFSharp.fs" Condition="!Exists('../../../nbs/CommonFSharp.fs')" />
+
     <Compile Include="../../../nbs/Async.fs" Condition="Exists('../../../nbs/Async.fs')" />
     <Compile Include="../../polyglot/nbs/Async.fs" Condition="!Exists('../../../nbs/Async.fs')" />
 
