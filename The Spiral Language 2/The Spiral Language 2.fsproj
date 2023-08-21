@@ -28,6 +28,13 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Include="../../../nbs/Common.fs" />
+    <Compile Include="../../../nbs/CommonFSharp.fs" />
+    <Compile Include="../../../nbs/Async.fs" />
+    <Compile Include="../../../nbs/AsyncSeq.fs" />
+    <Compile Include="../../../nbs/Runtime.fs" />
+    <Compile Include="../../../nbs/FileSystem.fs" />
+
     <None Include="Script1.fsx" />
     <Compile Include="PersistentVectorExtensions.fs" />
     <Compile Include="HopacExtensions.fs" />
@@ -52,25 +59,6 @@
     <Compile Include="SpiProj.fs" />
     <Compile Include="Graph.fs" />
     <Compile Include="ServerUtils.fs" />
-
-    <Compile Include="../../../nbs/Common.fs" Condition="Exists('../../../nbs/Common.fs')" />
-    <Compile Include="../../polyglot/nbs/Common.fs" Condition="!Exists('../../../nbs/Common.fs')" />
-
-    <Compile Include="../../../nbs/CommonFSharp.fs" Condition="Exists('../../../nbs/CommonFSharp.fs')" />
-    <Compile Include="../../polyglot/nbs/CommonFSharp.fs" Condition="!Exists('../../../nbs/CommonFSharp.fs')" />
-
-    <Compile Include="../../../nbs/Async.fs" Condition="Exists('../../../nbs/Async.fs')" />
-    <Compile Include="../../polyglot/nbs/Async.fs" Condition="!Exists('../../../nbs/Async.fs')" />
-
-    <Compile Include="../../../nbs/AsyncSeq.fs" Condition="Exists('../../../nbs/AsyncSeq.fs')" />
-    <Compile Include="../../polyglot/nbs/AsyncSeq.fs" Condition="!Exists('../../../nbs/AsyncSeq.fs')" />
-
-    <Compile Include="../../../nbs/Runtime.fs" Condition="Exists('../../../nbs/Runtime.fs')" />
-    <Compile Include="../../polyglot/nbs/Runtime.fs" Condition="!Exists('../../../nbs/Runtime.fs')" />
-
-    <Compile Include="../../../nbs/FileSystem.fs" Condition="Exists('../../../nbs/FileSystem.fs')" />
-    <Compile Include="../../polyglot/nbs/FileSystem.fs" Condition="!Exists('../../../nbs/FileSystem.fs')" />
-
     <Compile Include="Supervisor.fs" />
   </ItemGroup>
 
