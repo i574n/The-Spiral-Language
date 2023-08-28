@@ -304,6 +304,7 @@ let codegen (env : PartEvalResult) (x : TypedBind []) =
             | _ -> raise_codegen_error $"Compiler error: Unexpected type in Conv. Got: {show_ty a}"
             |> simple
         | TyApply(L(i,_),b) -> sprintf "v%i %s" i (tup b) |> simple
+        | TyOp(Global, [DLit (LitString x)]) -> global' x
         | TyOp(op,l) ->
             match op, l with
             | Dyn,[a] -> tup a
