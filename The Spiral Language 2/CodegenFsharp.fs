@@ -412,7 +412,7 @@ let codegen (env : PartEvalResult) (x : TypedBind []) =
     binds {text=main; indent=0} x
 
     let program = StringBuilder()
-    globals |> Seq.iter (fun x -> program.AppendLine(x) |> ignore)
+    globals |> Seq.iter (fun (x : string) -> program.AppendLine(x) |> ignore)
     types |> Seq.iteri (fun i x -> program.Append(if i = 0 then "type " else "and ").Append(x) |> ignore)
     functions |> Seq.iteri (fun i x -> program.Append(if i = 0 then "let rec " else "and ").Append(x) |> ignore)
     program.Append(main).ToString()
