@@ -1,8 +1,77 @@
-2.4.4 (WIP)
+2.4.21 (9/19/2023)
+
+* Changed the way the unions are generated so the return type errors in the HLS C++ compiler are avoided.
+
+2.4.20 (9/18/2023)
+
+* A significant number of changes related to how union types are compiled. The constructors/assignment operators will now get generated from them in the C++ backend.
+* Also changed the way closure arguments work. It should be much easier to use them for C++ interop.
+
+2.4.19 (9/14/2023)
+
+* Final bit of wrangling. I've removed ESBuild and Typescript as dependencies so they aren't getting packaged with the Spiral plugin anymore.
+* I won't bother trying to get the build systems to work anymore, I opened an issue on ESBuild as to why it is not bundling the `ws` package.
+
+2.4.14-18 (9/14/2023)
+
+* Trying to get the ESBuild to work.
+* It only works if the node_modules folder is present in the extension. What a waste of time this was.
+
+2.4.13 (9/14/2023)
+
+Type level artithmetic support.
+
+* Adjusted the printing of type literals so backticks are being output in the infer and partial eval phases.
+* Modified TypeLitToLit op so it evaluates the nominal wrappers to literals. This allows the language to support type level arithmetic operations.
+* Did a similar thing for the HLS C++ backend. Now splicing type lits in macros will work correctly.
+* The other backends don't support it yet.
+
+2.4.12 (9/8/2023)
+
+* Added the missing case in unify for type literals.
+
+2.4.11 (9/8/2023)
+
+* Fixed a bug in nominals with unit bodies.
+* Fixed the incorrect return type being assigned in nominal constructor functions.
+
+2.4.10 (9/8/2023)
+
+* Fixed an error when infering the or cases in the type inferencer.
+
+2.4.9 (9/6/2023)
+
+Minor HLS C++ backend bugfixes.
+
+* String is now `const char *` instead of a `char *`
+
+2.4.8 (9/6/2023)
+
+Minor HLS C++ backend bugfixes.
+
+* Fixed the invalid method names on the C backend.
+* Adjusted the backend so it forward generates the functions.
+* Moved forward declarations below the type declarations.
+
+2.4.7 (8/29/2023)
+
+* Also, fixed the erronous package existence regression.
+
+2.4.6 (8/29/2023)
+
+* Removed the print statement left in by accident.
+
+2.4.5 (8/29/2023)
+
+* Fixed the issue where writing a module called 'con' would cause the language server to deadlock.
+
+2.4.4 (8/29/2023)
 
 * Loosened the restriction on returning void in the HLS C++ backend.
 * Also added the printing of the array type.
 * Lightened up the imports in the C++ backend it doesn't need many of the C backend ones.
+* Extended the type parser so it parser default literals.
+* Fixed the overeager metavars assertion bug in nested functions.
 
 2.4.3 (1/24/2023)
 

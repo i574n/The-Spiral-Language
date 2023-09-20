@@ -11,6 +11,10 @@ open System.Text
 open System.Collections.Generic
 
 let is_string = function DV(L(_,YPrim StringT)) | DLit(LitString _) -> true | _ -> false
+// The number of bits needed to represent an union type with an x number of cases.
+// Strictly speaking it should be x * 2 - 1, but we do it like this to give 1 bit of extra wiggle room for the 2,4,8,16 kinds of cases
+// because of how TyUnionUnbox is being compiled.
+let num_bits_needed_to_represent (x : int) = Numerics.BitOperations.Log2(x * 2 |> uint) |> max 1
 
 let sizeof_tyv = function
     | YPrim (Int64T | UInt64T | Float64T) -> 64
@@ -31,11 +35,14 @@ let binds_last_data x = x |> Array.last |> function TyLocalReturnData(x,_) | TyL
 
 type UnionRec = {tag : int; free_vars : Map<string, TyV[]>}
 type MethodRec = {tag : int; free_vars : L<Tag,Ty>[]; range : Ty; body : TypedBind[]; name : string option}
-type ClosureRec = {tag : int; free_vars : L<Tag,Ty>[]; domain : Ty; domain_args : TyV[]; range : Ty; body : TypedBind[]}
+type ClosureRec = {tag : int; free_vars : L<Tag,Ty>[]; domain : Ty; range : Ty; body : TypedBind[]}
 type TupleRec = {tag : int; tys : Ty []}
-type CFunRec = {tag : int; domain_args_ty : Ty[]; range : Ty}
+type CFunRec = {tag : int; domain : Ty; range : Ty}
 
 let size_t = UInt32T
+
+// Replaces the invalid symbols in Spiral method names for the C backend.
+let fix_method_name (x : string) = x.Replace(''','_')
 
 let lit_string x =
     let strb = StringBuilder(String.length x + 2)
@@ -102,7 +109,7 @@ let codegen' (env : PartEvalResult) (x : TypedBind []) =
 
     let cfun' show =
         let dict = Dictionary(HashIdentity.Structural)
-        let f (a : Ty, b : Ty) = {tag=dict.Count; domain_args_ty=a |> env.ty_to_data |> data_free_vars |> Array.map (fun (L(_,t)) -> t); range=b}
+        let f (a : Ty, b : Ty) = {tag=dict.Count; domain=a; range=b}
         fun x ->
             let mutable dirty = false
             let r = Utils.memoize dict (fun x -> dirty <- true; f x) x
@@ -229,7 +236,7 @@ let codegen' (env : PartEvalResult) (x : TypedBind []) =
         | Float64T -> "double"
         | BoolT -> "bool" // part of c++ standard
         | CharT -> "char"
-        | StringT -> "char *"
+        | StringT -> "const char *"
     and lit = function
         | LitInt8 x -> sprintf "%i" x
         | LitInt16 x -> sprintf "%i" x
@@ -316,23 +323,27 @@ let codegen' (env : PartEvalResult) (x : TypedBind []) =
             List.pairwise is
             |> List.map (fun (L(i,_), L(i',_)) -> $"v{i}{acs}tag == v{i'}{acs}tag")
             |> String.concat " && "
-            |> function "" -> head | x -> $"{x} ? {head} : -1"
+            |> function "" -> head | x -> $"{x} ? {head} : (ap_uint<%i{num_bits_needed_to_represent case_tags.Count}>) -1"
             |> sprintf "switch (%s) {" |> line s
             let _ =
                 let s = indent s
-                Map.iter (fun k (a,b) ->
+                let _,on_succs = Map.foldBack (fun k v (is_last, m) -> false, Map.add k (is_last,v) m) on_succs (on_fail.IsNone, Map.empty)
+                Map.iter (fun k (is_last,(a,b)) ->
                     let union_i = case_tags.[k]
-                    line s (sprintf "case %i: { // %s" union_i k)
+
+                    if is_last then line s $"default: {{ // {k}"
+                    else line s $"case {union_i}: {{ // {k}"
+
                     List.iter2 (fun (L(data_i,_)) a ->
                         let a, s = data_free_vars a, indent s
                         let qs = ResizeArray(a.Length)
                         Array.iteri (fun field_i (L(v_i,t) as v) -> 
-                            qs.Add $"{tyv t} v{v_i} = v{data_i}{acs}case{union_i}.v{field_i};"
+                            qs.Add $"{tyv t} v{v_i} = v{data_i}{acs}v.case{union_i}.v{field_i};"
                             ) a 
                         line' s qs
                         ) is a
                     binds (indent s) ret b
-                    line (indent s) "break;"
+                    if not is_last then line (indent s) "break;"
                     line s "}"
                     ) on_succs
                 on_fail |> Option.iter (fun b ->
@@ -359,8 +370,11 @@ let codegen' (env : PartEvalResult) (x : TypedBind []) =
         | TyFailwith(a,b) -> raise_codegen_error "Failwith is not supported in the HLS C++ backend."
         | TyConv(a,b) -> return' $"({tyv a}){tup_data b}"
         | TyApply(L(i,_),b) -> 
-            //raise_codegen_error "Function pointer application is not supported in the HLS C++ backend."
-            $"v{i}({args' b})" |> return'
+            let rec loop = function
+                | DPair(a,b) -> tup_data a :: loop b
+                | a -> [tup_data a]
+            let args = loop b |> String.concat ", "
+            $"v{i}({args})" |> return'
         | TyArrayLength(_,b) -> raise_codegen_error "Array length is not supported in the HLS C++ backend as they are bare pointers."
         | TyStringLength(_,b) -> raise_codegen_error "String length is not supported in the HLS C++ backend."
         | TyOp(Global,[DLit (LitString x)]) -> global' x
@@ -423,42 +437,59 @@ let codegen' (env : PartEvalResult) (x : TypedBind []) =
     and method : _ -> MethodRec =
         jp (fun ((jp_body,key & (C(args,_))),i) ->
             match (fst env.join_point_method.[jp_body]).[key] with
-            | Some a, Some range, name -> {tag=i; free_vars=rdata_free_vars args; range=range; body=a; name=name}
+            | Some a, Some range, name -> {tag=i; free_vars=rdata_free_vars args; range=range; body=a; name=Option.map fix_method_name name}
             | _ -> raise_codegen_error "Compiler error: The method dictionary is malformed"
-            ) (fun _ s_typ s_fun x ->
+            ) (fun s_fwd s_typ s_fun x ->
             let ret_ty = tup_ty x.range
             let fun_name = Option.defaultValue "method" x.name
             let args = x.free_vars |> Array.mapi (fun i (L(_,x)) -> $"{tyv x} v{i}") |> String.concat ", "
+            line s_fwd (sprintf "%s %s%i(%s);" ret_ty fun_name x.tag args)
             line s_fun (sprintf "%s %s%i(%s){" ret_ty fun_name x.tag args)
             binds_start (indent s_fun) x.body
             line s_fun "}"
             )
+    and closure_args domain =
+        let rec loop = function
+            | YPair(a,b) -> a :: loop b
+            | a -> [a]
+        let mutable count = 0
+        let assert_not_void = function [||] -> raise_codegen_error "Void arguments in closures are not allowed." | x -> x
+        let rename x = Array.map (fun (L(i,t)) -> let x = L(count,t) in count <- count+1; x) x
+        loop domain |> List.mapi (fun i x -> let n = env.ty_to_data x |> data_free_vars in i, tup_ty_tyvs n, n |> rename |> assert_not_void)
     and closure : _ -> ClosureRec =
         jp (fun ((jp_body,key & (C(args,_,domain,range))),i) ->
             match (fst env.join_point_closure.[jp_body]).[key] with
             | Some(domain_args, body) -> 
                 let assert_empty x = if Array.isEmpty x then x else raise_codegen_error "The HLS C++ backend doesn't support closures due to them needing to be heap allocated, only function pointers. For them to be converted to pointers, the closures must not have any free variables in them."
-                {tag=i; free_vars=rdata_free_vars args |> assert_empty; domain=domain; domain_args=data_free_vars domain_args; range=range; body=body}
+                {tag=i; free_vars=rdata_free_vars args |> assert_empty; domain=domain; range=range; body=body}
             | _ -> raise_codegen_error "Compiler error: The method dictionary is malformed"
             ) (fun _ s_typ s_fun x ->
             let i, range = x.tag, tup_ty x.range
-            let domain_args = x.domain_args |> Array.map (fun (L(i,t)) -> $"{tyv t} v{i}") |> String.concat ", "
-            sprintf "%s ClosureMethod%i(%s){" range i domain_args |> line s_fun
-            binds_start (indent s_fun) x.body
+            let closure_args = closure_args x.domain
+            let args = closure_args |> List.map (fun (i,ty,_) -> $"{ty} tup{i}") |> String.concat ", "
+            $"{range} ClosureMethod{i}({args}){{" |> line s_fun
+            let _ =
+                let s_fun = indent s_fun
+                closure_args |> List.map (fun (i'',_,vars) ->
+                    Array.mapi (fun i' (L(i,t)) -> $"{tyv t} v{i} = tup{i''}.v{i'};") vars
+                    |> String.concat " "
+                    ) |> String.concat " " |> line s_fun
+                binds_start s_fun x.body
             line s_fun "}"
             )
     and cfun : _ -> CFunRec =
-        cfun' (fun _ s_typ s_fun x ->
+        cfun' (fun s_fwd s_typ s_fun x ->
             let i, range = x.tag, tup_ty x.range
-            let domain_args_ty = x.domain_args_ty |> Array.map tyv |> String.concat ", "
-            line s_typ $"typedef %s{range} (* Fun%i{i})(%s{domain_args_ty});"
+            let domain_args_ty = closure_args x.domain |> List.map (fun (_,ty,_) -> ty) |> String.concat ", "
+            line s_fwd $"typedef %s{range} (* Fun%i{i})(%s{domain_args_ty});"
             )
     and tup : _ -> TupleRec = 
-        tuple (fun _ s_typ s_fun x ->
+        tuple (fun s_fwd s_typ s_fun x ->
             let name = sprintf "Tuple%i" x.tag
-            line s_typ "typedef struct {"
+            line s_fwd $"struct {name};"
+            line s_typ $"struct {name} {{"
             x.tys |> Array.mapi (fun i x -> L(i,x)) |> print_ordered_args (indent s_typ)
-            line s_typ (sprintf "} %s;" name)
+            line s_typ "};"
 
             let args = x.tys |> Array.mapi (fun i x -> $"{tyv x} v{i}")
             line s_fun (sprintf "static inline %s TupleCreate%i(%s){" name x.tag (String.concat ", " args))
@@ -473,11 +504,12 @@ let codegen' (env : PartEvalResult) (x : TypedBind []) =
         let inline map_iteri f x = Map.fold (fun i k v -> f i k v; i+1) 0 x |> ignore
         union (fun s_fwd s_typ s_fun x ->
             let i = x.tag
-            line s_typ "typedef struct {"
+            line s_fwd $"struct US{i};"
+            line s_typ $"struct US{i} {{"
             let _ =
                 let s_typ = indent s_typ
-                line s_typ "int tag;"
-                line s_typ "union {"
+                line s_typ $"ap_uint<{num_bits_needed_to_represent x.free_vars.Count}> tag;"
+                line s_typ "union U {"
                 let _ =
                     let s_typ = indent s_typ
                     map_iteri (fun tag k v -> 
@@ -486,9 +518,39 @@ let codegen' (env : PartEvalResult) (x : TypedBind []) =
                             print_ordered_args (indent s_typ) v
                             line s_typ (sprintf "} case%i; // %s" tag k)
                         ) x.free_vars
-                line s_typ "};"
-            
-            line s_typ (sprintf "} US%i;" i)
+                    line s_typ "U() {}"
+                line s_typ "} v;"
+                line s_typ $"US{i}() {{}}"
+                let print_assignments () =
+                    let s_typ = indent s_typ
+                    line s_typ "this->tag = x.tag;"
+                    line s_typ "switch (x.tag) {"
+                    let _ =
+                        let s_typ = indent s_typ
+                        map_iteri (fun tag k v -> 
+                            if Array.length v <> 0 then
+                                line s_typ $"case {tag}: {{ this->v.case{tag} = x.v.case{tag}; break; }}"
+                            ) x.free_vars
+                    line s_typ "}"
+
+                line s_typ $"US{i}(const US{i} & x) {{"
+                print_assignments ()
+                line s_typ "}"
+
+                line s_typ $"US{i}(const US{i} && x) {{"
+                print_assignments ()
+                line s_typ "}"
+
+                line s_typ $"US{i} & operator=(US{i} & x) {{"
+                print_assignments()
+                line (indent s_typ) "return *this;"
+                line s_typ "}"
+                
+                line s_typ $"US{i} & operator=(US{i} && x) {{"
+                print_assignments()
+                line (indent s_typ) "return *this;"
+                line s_typ "}"
+            line s_typ "};"
 
             map_iteri (fun tag k v -> 
                 let args = v |> Array.map (fun (L(i,t)) -> $"{tyv t} v{i}") |> String.concat ", "
@@ -498,7 +560,7 @@ let codegen' (env : PartEvalResult) (x : TypedBind []) =
                     line s_fun $"US{i} x;"
                     line s_fun $"x.tag = {tag};"
                     if v.Length <> 0 then
-                        v |> Array.map (fun (L(i,t)) -> $"x.case{tag}.v{i} = v{i};") |> line' s_fun
+                        v |> Array.map (fun (L(i,t)) -> $"x.v.case{tag}.v{i} = v{i};") |> line' s_fun
                     line s_fun "return x;"
                 line s_fun "}"
                 ) x.free_vars
@@ -506,21 +568,35 @@ let codegen' (env : PartEvalResult) (x : TypedBind []) =
     and uheap _ : UnionRec = raise_codegen_error "Recursive unions aren't allowed in the HLS C++ backend due to them needing to be heap allocated."
 
     import "cstdint"
-
-    global' "template <int dim, typename el> struct array { el v[dim]; };"
+    import "array"
+    import' "ap_int.h"
 
     let main_defs = {text=StringBuilder(); indent=0}
 
-    line main_defs (sprintf "%s main(){" (binds_last_data x |> data_term_vars |> term_vars_to_tys |> tup_ty_tys))
+    let entry_ret_ty = binds_last_data x |> data_term_vars |> term_vars_to_tys |> tup_ty_tys
+    line main_defs $"{entry_ret_ty} entry() {{"
     binds_start (indent main_defs) x
     line main_defs "}"
 
-    let program = StringBuilder()
+    let hpp = StringBuilder()
+    hpp.AppendLine("#ifndef _ENTRY")
+       .AppendLine("#define _ENTRY") |> ignore
+    globals |> Seq.iter (fun x -> hpp.AppendLine(x) |> ignore)
+    fwd_dcls |> Seq.iter (fun x -> hpp.Append(x) |> ignore)
+    hpp.AppendLine($"{entry_ret_ty} entry();")
+        .AppendLine("#endif") |> ignore
 
-    globals |> Seq.iter (fun x -> program.AppendLine(x) |> ignore)
-    fwd_dcls |> Seq.iter (fun x -> program.Append(x) |> ignore)
-    types |> Seq.iter (fun x -> program.Append(x) |> ignore)
-    functions |> Seq.iter (fun x -> program.Append(x) |> ignore)
-    program.Append(main_defs.text).ToString()
+
+    let cpp = StringBuilder()
+    globals |> Seq.iter (fun x -> cpp.AppendLine(x) |> ignore)
+    fwd_dcls |> Seq.iter (fun x -> cpp.Append(x) |> ignore)
+    types |> Seq.iter (fun x -> cpp.Append(x) |> ignore)
+    functions |> Seq.iter (fun x -> cpp.Append(x) |> ignore)
+    
+    cpp.Append(main_defs.text) |> ignore
+    [
+    {|code = cpp.ToString(); file_extension = "cpp"|}
+    {|code = hpp.ToString(); file_extension = "hpp"|}
+    ]
 
 let codegen (env : PartEvalResult) (x : TypedBind []) = codegen' env x

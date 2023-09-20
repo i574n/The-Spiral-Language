@@ -1,5 +1,13 @@
 // The statically type arrays video.
 
+open corehls
+
 inl main () =
     global "#include <iostream>"
+    open sam
+    inl ar : sa 10 i32 = init id
+    ar
+    |> map (fun x => x + 10)
+    |> map (fun x => x * 2)
+    |> iter (fun x => $"std::cout << !x << std::endl")
     0i32

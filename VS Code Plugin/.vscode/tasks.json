@@ -19,6 +19,13 @@
 			],
 			"group": "build",
 			"label": "tsc: build - tsconfig.json"
+		},
+		{
+			"type": "npm",
+			"script": "esbuild",
+			"group": "build",
+			"problemMatcher": [],
+			"label": "npm: esbuild"
 		}
 	]
 }

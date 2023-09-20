@@ -1,4 +1,4 @@
-﻿module Spiral.Supervisor
+module Spiral.Supervisor
 
 open VSCTypes
 open Graph
@@ -80,7 +80,7 @@ let file_delete s (files : string []) =
     let modules = Seq.foldBack Map.remove deleted_modules s.modules
     let packages = Seq.foldBack Map.remove deleted_packages s.packages
     let dirty_packages = HashSet(deleted_packages)
-    let revalidate_parent x =
+    let revalidate_parent x = 
         let rec loop (x : DirectoryInfo) =
             if x = null then ()
             elif Map.containsKey x.FullName s.packages then dirty_packages.Add(x.FullName) |> ignore
@@ -116,7 +116,7 @@ let attention_server (errors : SupervisorErrorSources) (req : _ Ch) =
             list x.schema.modules
             )
 
-        let inline body uri interrupt ers ers' src next =
+        let inline body uri interrupt ers ers' src next = 
             Ch.Try.take req >>= function
             | Some x -> interrupt x
             | None ->
@@ -155,10 +155,10 @@ let attention_server (errors : SupervisorErrorSources) (req : _ Ch) =
 
         let package s =
             match s.packages with
-            | se,x :: xs ->
+            | se,x :: xs -> 
                 let s = {s with packages=Set.remove x se,xs}
-                let package_errors =
-                    match Map.tryFind x s.supervisor.packages with
+                let package_errors = 
+                    match Map.tryFind x s.supervisor.packages with 
                     | Some v -> List.concat [v.errors_parse; v.errors_modules; v.errors_packages]
                     | None -> []
                 Hopac.start (Ch.send errors.package ({|uri=Utils.file_uri(spiproj_suffix x); errors=package_errors|}))
@@ -166,10 +166,10 @@ let attention_server (errors : SupervisorErrorSources) (req : _ Ch) =
                 match Map.tryFind x (fst s.supervisor.package_ids) with
                 | Some uid ->
                     match Map.tryFind uid s.supervisor.packages_infer.ok with
-                    | Some v ->
+                    | Some v -> 
                         let path_tcvals =
                             let uids_file = v.files.uids_file
-                            let rec loop x s =
+                            let rec loop x s = 
                                 match x with
                                 | WDiff.File(mid,path,_) -> (path, (fst uids_file.[mid]).result) :: s
                                 | WDiff.Directory(_,_,l) -> list l s
@@ -181,14 +181,14 @@ let attention_server (errors : SupervisorErrorSources) (req : _ Ch) =
             | _, [] -> req >>= (update s >> loop)
 
         match s.modules with
-        | se,x :: xs ->
+        | se,x :: xs -> 
             let s = {s with modules=Set.remove x se,xs}
             match Map.tryFind x s.supervisor.modules with
             | Some v -> loop_module s x v
             | None -> clear (Utils.file_uri x); package s
         | _,[] -> package s
 
-    (req >>= fun (modules,packages,supervisor) ->
+    (req >>= fun (modules,packages,supervisor) -> 
         loop {modules = Set.ofArray modules, Array.toList modules; packages = Set.ofArray packages, Array.toList packages; supervisor = supervisor; old_packages = Map.empty}
         )
 
@@ -205,7 +205,7 @@ let show_position (s : SupervisorState) (x : PartEval.Prepass.Range) =
 
 let show_trace s (x : PartEval.Main.Trace) (msg : string) =
     let rec loop (l : PartEval.Main.Trace) = function
-        | (x : PartEval.Prepass.Range) :: xs ->
+        | (x : PartEval.Prepass.Range) :: xs -> 
             match l with
             | x' :: _ when x.path = x'.path && fst x.range = fst x'.range -> loop l xs
             | _ -> loop (x :: l) xs
@@ -213,7 +213,7 @@ let show_trace s (x : PartEval.Main.Trace) (msg : string) =
     List.map (show_position s) (loop [] x), msg
 
 type BuildResult =
-    | BuildOk of code: string * file_extension : string
+    | BuildOk of {|code: string; file_extension : string|} list
     | BuildErrorTrace of string list * string
     | BuildFatalError of string
     | BuildSkip
@@ -227,7 +227,7 @@ let supervisor_server atten (errors : SupervisorErrorSources) req =
     let handle_files_packages (dirty_files,(dirty_packages,s)) = Hopac.start (Ch.send atten (dirty_files,dirty_packages,s)); s
     let loop (s : SupervisorState) = req >>- function
         | ProjectFileChange x | ProjectFileOpen x -> proj_open s (dir x.uri,Some x.spiprojText) |> handle_packages
-        | FileOpen x ->
+        | FileOpen x -> 
             let file = file x.uri
             match Map.tryFind file s.modules with
             | Some m -> WDiff.wdiff_module_all m x.spiText
@@ -238,12 +238,12 @@ let supervisor_server atten (errors : SupervisorErrorSources) req =
             let file = file x.uri
             match Map.tryFind file s.modules with
             | None -> fatal "It is not possible to apply a change to a file that is not present in the environment. Try reopening it in the editor."; s
-            | Some m ->
+            | Some m -> 
                 match WDiff.wdiff_module_edit m x.spiEdit with
                 | Ok v -> proj_revalidate_owner {s with modules = Map.add file v s.modules} file |> handle_file_packages file
                 | Error er -> fatal er; s
         | FileDelete x -> file_delete s (Array.map file x.uris) |> handle_files_packages
-        | ProjectFileLinks(x,res) ->
+        | ProjectFileLinks(x,res) -> 
             let l =
                 match Map.tryFind (dir x.uri) s.packages with
                 | None -> []
@@ -279,16 +279,16 @@ let supervisor_server atten (errors : SupervisorErrorSources) req =
                     actions_dir x.schema.packageDir
 
                     let rec actions_module = function
-                        | SpiProj.FileHierarchy.Directory(r',(r,path),_,l) ->
+                        | SpiProj.FileHierarchy.Directory(r',(r,path),_,l) -> 
                             if Directory.Exists(path) then
                                 z <- (r,RenameDirectory {|dirPath=path; target=null; validate_as_file=true|}) :: (r,DeleteDirectory {|dirPath=path; range=r'|}) :: z
                             else
                                 z <- (r,CreateDirectory {|dirPath=path|}) :: z
                             actions_modules l
-                        | SpiProj.FileHierarchy.File(r',(r,path),_) ->
-                            if Map.containsKey path s.modules then
+                        | SpiProj.FileHierarchy.File(r',(r,path),_) -> 
+                            if Map.containsKey path s.modules then 
                                 z <- (r,RenameFile {|filePath=path; target=null|}) :: (r,DeleteFile {|range=r'; filePath=path|}) :: z
-                            else
+                            else 
                                 z <- (r,CreateFile {|filePath=path|}) :: z
                     and actions_modules l = List.iter actions_module l
                     actions_modules x.schema.modules
@@ -303,12 +303,12 @@ let supervisor_server atten (errors : SupervisorErrorSources) req =
                 | Ok path -> None, file_delete s [|path|] |> handle_files_packages
             Hopac.start (IVar.fill res {|result=error|})
             s
-        | FileTokenRange(x, res) ->
+        | FileTokenRange(x, res) -> 
             match Map.tryFind (file x.uri) s.modules with
             | Some v -> Hopac.start (BlockBundling.semantic_tokens v.parser >>= (Tokenize.vscode_tokens x.range >> IVar.fill res))
             | None -> Hopac.start (IVar.fill res [||])
             s
-        | HoverAt(x,res) ->
+        | HoverAt(x,res) -> 
             let file = file x.uri
             let pos = x.pos
             let go_hover x =
@@ -328,7 +328,7 @@ let supervisor_server atten (errors : SupervisorErrorSources) req =
                         // If the block is over the offset that means the previous one must be the right choice.
                         else go_hover s
                 Hopac.start (loop None x.result)
-            let rec go_file uids_file trees =
+            let rec go_file uids_file trees = 
                 let rec loop = function
                     | WDiff.File(uid,file',_) -> if file = file' then go_block (Array.get uids_file uid |> fst); true else false
                     | WDiff.Directory(_,_,l) -> list l
@@ -342,7 +342,7 @@ let supervisor_server atten (errors : SupervisorErrorSources) req =
                         match Map.tryFind pid s.packages_infer.ok with
                         | None -> false
                         | Some x -> go_file x.files.uids_file x.files.files.tree
-                    else
+                    else 
                         go_parent x.Parent
             if go_parent (Directory.GetParent(file)) = false then Hopac.start (IVar.fill res None)
             s
@@ -350,7 +350,11 @@ let supervisor_server atten (errors : SupervisorErrorSources) req =
             let backend = x.backend
             let file = file x.uri
             let handle_build_result = function
-                | BuildOk(x,ext) -> Job.fromUnitTask (fun () -> IO.File.WriteAllTextAsync(IO.Path.ChangeExtension(file,ext), x))
+                | BuildOk l -> 
+                    Job.fromUnitTask (fun () -> task {
+                        for x in l do 
+                            do! IO.File.WriteAllTextAsync(IO.Path.ChangeExtension(file,x.file_extension), x.code)
+                    })
                 | BuildFatalError x -> Ch.send errors.fatal x
                 | BuildErrorTrace(a,b) -> Ch.send errors.traced {|trace=a; message=b|}
                 | BuildSkip ->
@@ -362,23 +366,23 @@ let supervisor_server atten (errors : SupervisorErrorSources) req =
                 let x,_ = prepass.files.uids_file.[mid]
                 Hopac.start (a.state >>= fun (has_error',_) ->
                     b >>= fun (has_error,_) ->
-                    if has_error || has_error' then fatal $"File {Path.GetFileNameWithoutExtension file} has a type error somewhere in its path."; Job.unit() else
+                    if has_error || has_error' then fatal $"File {Path.GetFileNameWithoutExtension file} has a type error somewhere in its path."; Job.unit() else 
                     Stream.foldFun (fun _ (_,_,env) -> env) PartEval.Prepass.top_env_empty x.result >>= fun env ->
                     match Map.tryFind "main" env.term with
                     | Some main ->
                         let prototypes_instances = Dictionary(env.prototypes_instances)
-                        let nominals =
+                        let nominals = 
                             let t = HashConsing.HashConsTable()
                             let d = Dictionary()
                             env.nominals |> Map.iter (fun k v -> d.Add(k, t.Add {|v with id=k|}))
                             d
                         try let (a,_),b = PartEval.Main.peval {prototypes_instances=prototypes_instances; nominals=nominals} main
                             match backend with
-                            | "Fsharp" -> BuildOk(Codegen.Fsharp.codegen b a, "fsx")
-                            | "Python" -> BuildOk(Codegen.Python.codegen b a, "py")
-                            | "C" -> BuildOk(Codegen.C.codegen b a, "c")
-                            | "HLS C++" -> BuildOk(Codegen.HLS.Cpp.codegen b a, "cpp")
-                            | "UPMEM: Python + C" -> BuildOk(Codegen.Python.codegen_upmem_python_host b a, "py")
+                            | "Fsharp" -> BuildOk [{|code = Codegen.Fsharp.codegen b a; file_extension = "fsx"|}]
+                            | "Python" -> BuildOk [{|code = Codegen.Python.codegen b a; file_extension = "py"|}]
+                            | "C" -> BuildOk [{|code = Codegen.C.codegen b a; file_extension = "c"|}]
+                            | "HLS C++" -> BuildOk (Codegen.HLS.Cpp.codegen b a)
+                            | "UPMEM: Python + C" -> BuildOk [{|code = Codegen.Python.codegen_upmem_python_host b a; file_extension = "py"|}]
                             | "Cython*" | "Cython" -> BuildFatalError "The Cython backend has been replaced by the Python one in v2.3.1 of Spiral. Please use an earlier version to access it." // Date: 12/27/2022
                             | _ -> BuildFatalError $"Cannot recognize the backend: {backend}"
                         with
@@ -452,12 +456,12 @@ open NetMQ.Sockets
 open Polyglot
 open Polyglot.Common
 open Polyglot.FileSystem
-
+        
 let [<EntryPoint>] main args =
     let env_def = {|
         port = 13805
         |}
-    let env = (env_def, args) ||> Array.fold (fun s x ->
+    let env = (env_def, args) ||> Array.fold (fun s x -> 
         match x.Split('=') with
         | [|"port"; x|] -> {|s with port = Int32.Parse(x)|}
         | _ -> failwithf "Invalid command line argument received when starting up the server.\nGot: %A" x

@@ -20,7 +20,7 @@ inl init forall dim el. f : sa dim el =
 // Maps an array.
 inl map forall dim. f (ar : sa dim _) : sa dim _ = init (fun i => index ar i |> f)
 // Maps an array. Provides the index as the first argument.
-inl map forall dim. f (ar : sa dim _) : sa dim _ = init (fun i => index ar i |> f i)
+inl mapi forall dim. f (ar : sa dim _) : sa dim _ = init (fun i => index ar i |> f i)
 // Iterates over an array.
 inl iter f ar = for' {from=0; nearTo=length ar} (index ar >> f)
 // Iterates over an array. Provides the index as the first argument.
