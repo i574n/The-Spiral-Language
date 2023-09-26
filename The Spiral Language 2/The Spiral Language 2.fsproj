@@ -72,11 +72,11 @@
     <PackageReference Include="Argu" Version="6.1.1" />
     <PackageReference Include="FSharp.Control.AsyncSeq" Version="3.2.1" />
     <PackageReference Include="System.CommandLine" Version="2.0.0-beta4.22272.1" />
-    <PackageReference Include="System.Reactive.Linq" Version="6.0.0-preview.16" />
+    <PackageReference Include="System.Reactive.Linq" Version="6.0.0" />
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Update="FSharp.Core" Version="7.0.400" />
+    <PackageReference Update="FSharp.Core" Version="8.0.100-beta.23418.2" />
   </ItemGroup>
 
 </Project>
