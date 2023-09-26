@@ -601,13 +601,16 @@ let [<EntryPoint>] main args =
             | FileSystem.FileSystemChange.Created (path, _) ->
                 let fullPath = commands_dir </> path
                 if File.Exists fullPath then
-                    let! json = FileSystem.readAllTextAsync fullPath
-                    let! result = connection.InvokeAsync<string>("ClientToServerMsg", json) |> Async.AwaitTask
-                    let oldPath = old_dir </> path
-                    File.Move (fullPath, oldPath)
-                    if result |> String.trim |> String.length > 0 then
-                        let resultPath = old_dir </> $"{Path.GetFileNameWithoutExtension path}_result.json"
-                        do! result |> FileSystem.writeAllTextAsync resultPath
+                    try
+                        let! json = FileSystem.readAllTextAsync fullPath
+                        let! result = connection.InvokeAsync<string>("ClientToServerMsg", json) |> Async.AwaitTask
+                        let oldPath = old_dir </> path
+                        File.Move (fullPath, oldPath)
+                        if result |> String.trim |> String.length > 0 then
+                            let resultPath = old_dir </> $"{Path.GetFileNameWithoutExtension path}_result.json"
+                            do! result |> FileSystem.writeAllTextAsync resultPath
+                    with ex ->
+                        trace Critical (fun () -> "watchDirectory / iterAsyncParallel / ex: {ex |> printException}") getLocals
             | _ -> ()
         })
         |> Async.StartChild
