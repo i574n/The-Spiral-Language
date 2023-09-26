@@ -487,9 +487,15 @@ type SpiralHub(supervisor : Supervisor) =
         let client_req = Json.deserialize x
 
         if Directory.Exists trace_dir then
-            let req_name = client_req.GetType().Name
-            let trace_file = trace_dir </> $"{DateTimeOffset.Now:yyyy_MM_dd_HH_mm_ss_fff}_{req_name}.json"
-            File.WriteAllText (trace_file, x)
+            async {
+                try
+                    let req_name = client_req.GetType().Name
+                    let trace_file = trace_dir </> $"{DateTimeOffset.Now:yyyy_MM_dd_HH_mm_ss_fff}_{req_name}.json"
+                    do! x |> FileSystem.writeAllTextAsync trace_file
+                with ex ->
+                    trace Critical (fun () -> "ClientToServerMsg / ex: {ex |> printException}") getLocals
+            }
+            |> Async.Start
 
         match client_req with
         | ProjectFileOpen x -> job_null (supervisor *<+ SupervisorReq.ProjectFileOpen x)
