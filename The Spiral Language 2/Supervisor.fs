@@ -80,7 +80,7 @@ let file_delete s (files : string []) =
     let modules = Seq.foldBack Map.remove deleted_modules s.modules
     let packages = Seq.foldBack Map.remove deleted_packages s.packages
     let dirty_packages = HashSet(deleted_packages)
-    let revalidate_parent x = 
+    let revalidate_parent x =
         let rec loop (x : DirectoryInfo) =
             if x = null then ()
             elif Map.containsKey x.FullName s.packages then dirty_packages.Add(x.FullName) |> ignore
@@ -116,7 +116,7 @@ let attention_server (errors : SupervisorErrorSources) (req : _ Ch) =
             list x.schema.modules
             )
 
-        let inline body uri interrupt ers ers' src next = 
+        let inline body uri interrupt ers ers' src next =
             Ch.Try.take req >>= function
             | Some x -> interrupt x
             | None ->
@@ -155,10 +155,10 @@ let attention_server (errors : SupervisorErrorSources) (req : _ Ch) =
 
         let package s =
             match s.packages with
-            | se,x :: xs -> 
+            | se,x :: xs ->
                 let s = {s with packages=Set.remove x se,xs}
-                let package_errors = 
-                    match Map.tryFind x s.supervisor.packages with 
+                let package_errors =
+                    match Map.tryFind x s.supervisor.packages with
                     | Some v -> List.concat [v.errors_parse; v.errors_modules; v.errors_packages]
                     | None -> []
                 Hopac.start (Ch.send errors.package ({|uri=Utils.file_uri(spiproj_suffix x); errors=package_errors|}))
@@ -166,10 +166,10 @@ let attention_server (errors : SupervisorErrorSources) (req : _ Ch) =
                 match Map.tryFind x (fst s.supervisor.package_ids) with
                 | Some uid ->
                     match Map.tryFind uid s.supervisor.packages_infer.ok with
-                    | Some v -> 
+                    | Some v ->
                         let path_tcvals =
                             let uids_file = v.files.uids_file
-                            let rec loop x s = 
+                            let rec loop x s =
                                 match x with
                                 | WDiff.File(mid,path,_) -> (path, (fst uids_file.[mid]).result) :: s
                                 | WDiff.Directory(_,_,l) -> list l s
@@ -181,14 +181,14 @@ let attention_server (errors : SupervisorErrorSources) (req : _ Ch) =
             | _, [] -> req >>= (update s >> loop)
 
         match s.modules with
-        | se,x :: xs -> 
+        | se,x :: xs ->
             let s = {s with modules=Set.remove x se,xs}
             match Map.tryFind x s.supervisor.modules with
             | Some v -> loop_module s x v
             | None -> clear (Utils.file_uri x); package s
         | _,[] -> package s
 
-    (req >>= fun (modules,packages,supervisor) -> 
+    (req >>= fun (modules,packages,supervisor) ->
         loop {modules = Set.ofArray modules, Array.toList modules; packages = Set.ofArray packages, Array.toList packages; supervisor = supervisor; old_packages = Map.empty}
         )
 
@@ -205,7 +205,7 @@ let show_position (s : SupervisorState) (x : PartEval.Prepass.Range) =
 
 let show_trace s (x : PartEval.Main.Trace) (msg : string) =
     let rec loop (l : PartEval.Main.Trace) = function
-        | (x : PartEval.Prepass.Range) :: xs -> 
+        | (x : PartEval.Prepass.Range) :: xs ->
             match l with
             | x' :: _ when x.path = x'.path && fst x.range = fst x'.range -> loop l xs
             | _ -> loop (x :: l) xs
@@ -227,7 +227,7 @@ let supervisor_server atten (errors : SupervisorErrorSources) req =
     let handle_files_packages (dirty_files,(dirty_packages,s)) = Hopac.start (Ch.send atten (dirty_files,dirty_packages,s)); s
     let loop (s : SupervisorState) = req >>- function
         | ProjectFileChange x | ProjectFileOpen x -> proj_open s (dir x.uri,Some x.spiprojText) |> handle_packages
-        | FileOpen x -> 
+        | FileOpen x ->
             let file = file x.uri
             match Map.tryFind file s.modules with
             | Some m -> WDiff.wdiff_module_all m x.spiText
@@ -238,12 +238,12 @@ let supervisor_server atten (errors : SupervisorErrorSources) req =
             let file = file x.uri
             match Map.tryFind file s.modules with
             | None -> fatal "It is not possible to apply a change to a file that is not present in the environment. Try reopening it in the editor."; s
-            | Some m -> 
+            | Some m ->
                 match WDiff.wdiff_module_edit m x.spiEdit with
                 | Ok v -> proj_revalidate_owner {s with modules = Map.add file v s.modules} file |> handle_file_packages file
                 | Error er -> fatal er; s
         | FileDelete x -> file_delete s (Array.map file x.uris) |> handle_files_packages
-        | ProjectFileLinks(x,res) -> 
+        | ProjectFileLinks(x,res) ->
             let l =
                 match Map.tryFind (dir x.uri) s.packages with
                 | None -> []
@@ -279,16 +279,16 @@ let supervisor_server atten (errors : SupervisorErrorSources) req =
                     actions_dir x.schema.packageDir
 
                     let rec actions_module = function
-                        | SpiProj.FileHierarchy.Directory(r',(r,path),_,l) -> 
+                        | SpiProj.FileHierarchy.Directory(r',(r,path),_,l) ->
                             if Directory.Exists(path) then
                                 z <- (r,RenameDirectory {|dirPath=path; target=null; validate_as_file=true|}) :: (r,DeleteDirectory {|dirPath=path; range=r'|}) :: z
                             else
                                 z <- (r,CreateDirectory {|dirPath=path|}) :: z
                             actions_modules l
-                        | SpiProj.FileHierarchy.File(r',(r,path),_) -> 
-                            if Map.containsKey path s.modules then 
+                        | SpiProj.FileHierarchy.File(r',(r,path),_) ->
+                            if Map.containsKey path s.modules then
                                 z <- (r,RenameFile {|filePath=path; target=null|}) :: (r,DeleteFile {|range=r'; filePath=path|}) :: z
-                            else 
+                            else
                                 z <- (r,CreateFile {|filePath=path|}) :: z
                     and actions_modules l = List.iter actions_module l
                     actions_modules x.schema.modules
@@ -303,12 +303,12 @@ let supervisor_server atten (errors : SupervisorErrorSources) req =
                 | Ok path -> None, file_delete s [|path|] |> handle_files_packages
             Hopac.start (IVar.fill res {|result=error|})
             s
-        | FileTokenRange(x, res) -> 
+        | FileTokenRange(x, res) ->
             match Map.tryFind (file x.uri) s.modules with
             | Some v -> Hopac.start (BlockBundling.semantic_tokens v.parser >>= (Tokenize.vscode_tokens x.range >> IVar.fill res))
             | None -> Hopac.start (IVar.fill res [||])
             s
-        | HoverAt(x,res) -> 
+        | HoverAt(x,res) ->
             let file = file x.uri
             let pos = x.pos
             let go_hover x =
@@ -328,7 +328,7 @@ let supervisor_server atten (errors : SupervisorErrorSources) req =
                         // If the block is over the offset that means the previous one must be the right choice.
                         else go_hover s
                 Hopac.start (loop None x.result)
-            let rec go_file uids_file trees = 
+            let rec go_file uids_file trees =
                 let rec loop = function
                     | WDiff.File(uid,file',_) -> if file = file' then go_block (Array.get uids_file uid |> fst); true else false
                     | WDiff.Directory(_,_,l) -> list l
@@ -342,7 +342,7 @@ let supervisor_server atten (errors : SupervisorErrorSources) req =
                         match Map.tryFind pid s.packages_infer.ok with
                         | None -> false
                         | Some x -> go_file x.files.uids_file x.files.files.tree
-                    else 
+                    else
                         go_parent x.Parent
             if go_parent (Directory.GetParent(file)) = false then Hopac.start (IVar.fill res None)
             s
@@ -350,9 +350,9 @@ let supervisor_server atten (errors : SupervisorErrorSources) req =
             let backend = x.backend
             let file = file x.uri
             let handle_build_result = function
-                | BuildOk l -> 
+                | BuildOk l ->
                     Job.fromUnitTask (fun () -> task {
-                        for x in l do 
+                        for x in l do
                             do! IO.File.WriteAllTextAsync(IO.Path.ChangeExtension(file,x.file_extension), x.code)
                     })
                 | BuildFatalError x -> Ch.send errors.fatal x
@@ -366,12 +366,12 @@ let supervisor_server atten (errors : SupervisorErrorSources) req =
                 let x,_ = prepass.files.uids_file.[mid]
                 Hopac.start (a.state >>= fun (has_error',_) ->
                     b >>= fun (has_error,_) ->
-                    if has_error || has_error' then fatal $"File {Path.GetFileNameWithoutExtension file} has a type error somewhere in its path."; Job.unit() else 
+                    if has_error || has_error' then fatal $"File {Path.GetFileNameWithoutExtension file} has a type error somewhere in its path."; Job.unit() else
                     Stream.foldFun (fun _ (_,_,env) -> env) PartEval.Prepass.top_env_empty x.result >>= fun env ->
                     match Map.tryFind "main" env.term with
                     | Some main ->
                         let prototypes_instances = Dictionary(env.prototypes_instances)
-                        let nominals = 
+                        let nominals =
                             let t = HashConsing.HashConsTable()
                             let d = Dictionary()
                             env.nominals |> Map.iter (fun k v -> d.Add(k, t.Add {|v with id=k|}))
@@ -438,7 +438,6 @@ type ClientReq =
     | FileTokenRange of {|uri : string; range : VSCRange|}
     | HoverAt of {|uri : string; pos : VSCPos|}
     | BuildFile of {|uri : string; backend : string|}
-    | Ping of bool
     | Exit of bool
 
 type ClientErrorsRes =
@@ -449,84 +448,50 @@ type ClientErrorsRes =
     | ParserErrors of {|uri : string; errors : RString list|}
     | TypeErrors of {|uri : string; errors : RString list|}
 
+open Microsoft.AspNetCore.SignalR
 open FSharp.Json
-open NetMQ
-open NetMQ.Sockets
 
 open Polyglot
 open Polyglot.Common
-open Polyglot.FileSystem
-        
-let [<EntryPoint>] main args =
-    let env_def = {|
-        port = 13805
-        |}
-    let env = (env_def, args) ||> Array.fold (fun s x -> 
-        match x.Split('=') with
-        | [|"port"; x|] -> {|s with port = Int32.Parse(x)|}
-        | _ -> failwithf "Invalid command line argument received when starting up the server.\nGot: %A" x
-        )
-    let uri_server = sprintf "tcp://*:%i" env.port
-    let uri_client = sprintf "tcp://*:%i" (env.port+1)
-    use poller = new NetMQPoller()
-    use server = new RouterSocket()
-    poller.Add(server)
-    server.Options.ReceiveHighWatermark <- System.Int32.MaxValue
-    server.Bind(uri_server)
+open Polyglot.FileSystem.Operators
+open Microsoft.AspNetCore.SignalR.Client
 
-    use queue_server = new NetMQQueue<NetMQMessage>()
-    poller.Add(queue_server)
 
-    use queue_client = new NetMQQueue<ClientErrorsRes>()
-    poller.Add(queue_client)
+type Supervisor = {
+    supervisor_ch : SupervisorReq Ch
+    }
 
-    let error_ch_create msg =
-        let x = Ch()
-        Hopac.server (Job.forever (Ch.take x >>- (msg >> queue_client.Enqueue)))
-        x
-    let errors : SupervisorErrorSources = {
-        fatal = error_ch_create FatalError
-        package = error_ch_create PackageErrors
-        tokenizer = error_ch_create TokenizerErrors
-        parser = error_ch_create ParserErrors
-        typer = error_ch_create TypeErrors
-        traced = error_ch_create TracedError
-        }
-    let supervisor = Ch()
-    let atten = Ch()
-    Hopac.server (attention_server errors atten)
-    Hopac.start (supervisor_server atten errors supervisor)
 
-    let mutable time = DateTimeOffset.Now
-    #if !DEBUG
-    let timer = NetMQTimer(10000)
-    poller.Add(timer)
-    timer.EnableAndReset()
-    use __ = timer.Elapsed.Subscribe(fun _ ->
-        if TimeSpan.FromSeconds(10.0) < DateTimeOffset.Now - time then poller.Stop()
-        )
-    #endif
+let dll_path = System.Reflection.Assembly.GetExecutingAssembly().Location |> System.IO.Path.GetDirectoryName
+let supervisor_dir = dll_path </> "supervisor"
+let trace_dir = supervisor_dir </> "trace"
+let commands_dir = supervisor_dir </> "commands"
+let old_dir = supervisor_dir </> "old"
 
-    let dll_path = System.Reflection.Assembly.GetExecutingAssembly().Location |> System.IO.Path.GetDirectoryName
-    let supervisor_dir = dll_path </> "supervisor"
-    let trace_dir = supervisor_dir </> "trace"
-    let commands_dir = supervisor_dir </> "commands"
-    let old_dir = supervisor_dir </> "old"
 
-    let run (address : NetMQFrame) (msg : NetMQMessage) (path : string option) (x : ClientReq) =
-        let push_back (x : obj) =
+type SpiralHub(supervisor : Supervisor) =
+    inherit Hub()
+
+    member _.ClientToServerMsg (x : string) =
+        let job_null job = Hopac.start job; task { return null }
+
+        let serialize (x : obj) =
             match x with
-            | :? Option<string> as x ->
-                match x with
-                | Some x -> msg.Push(x)
-                | None -> msg.PushEmptyFrame()
-            | _ -> msg.Push(Json.serialize x)
-            msg.PushEmptyFrame(); msg.Push(address)
-        let send_back x = push_back x; server.SendMultipartMessage(msg)
-        let send_back_via_queue x = push_back x; queue_server.Enqueue(msg)
-        let job_null job = Hopac.start job; send_back null
-        let job_val job = let res = IVar() in Hopac.start (job res >>=. IVar.read res >>- send_back_via_queue)
-        match x with
+            | null -> null
+            | :? Option<string> as x -> x.Value
+            | _ -> Json.serialize x
+
+        let job_val job = let res = IVar() in Hopac.queueAsTask (job res >>=. IVar.read res >>- serialize)
+        let supervisor = supervisor.supervisor_ch
+
+        let client_req = Json.deserialize x
+
+        if Directory.Exists trace_dir then
+            let req_name = client_req.GetType().Name
+            let trace_file = trace_dir </> $"{DateTimeOffset.Now:yyyy_MM_dd_HH_mm_ss_fff}_{req_name}.json"
+            File.WriteAllText (trace_file, x)
+
+        match client_req with
         | ProjectFileOpen x -> job_null (supervisor *<+ SupervisorReq.ProjectFileOpen x)
         | ProjectFileChange x -> job_null (supervisor *<+ SupervisorReq.ProjectFileChange x)
         | ProjectCodeActionExecute x -> job_val (fun res -> supervisor *<+ SupervisorReq.ProjectCodeActionExecute(x,res))
@@ -538,23 +503,80 @@ let [<EntryPoint>] main args =
         | FileTokenRange x -> job_val (fun res -> supervisor *<+ SupervisorReq.FileTokenRange(x,res))
         | HoverAt x -> job_val (fun res -> supervisor *<+ SupervisorReq.HoverAt(x,res))
         | BuildFile x -> job_null (supervisor *<+ SupervisorReq.BuildFile x)
-        | Ping _ -> send_back null
         | Exit _ ->
             async {
                 printfn "Exiting..."
-                do! Async.Sleep 1000
-                System.Environment.Exit 0
-                // System.Diagnostics.Process.GetCurrentProcess().Kill()
+                async {
+                    do! Async.Sleep 1000
+                    System.Environment.Exit 0
+                    // System.Diagnostics.Process.GetCurrentProcess().Kill()
+                }
+                |> Async.Start
+                return null
             }
-            |> Async.Start
-            send_back null
-        time <- DateTimeOffset.Now
-        match path with
-        | Some path ->
-            let fullPath = commands_dir </> path
-            let oldPath = old_dir </> path
-            File.Move (fullPath, oldPath)
-        | None -> ()
+            |> Async.StartAsTask
+
+open Microsoft.AspNetCore.Builder
+open Microsoft.AspNetCore.Hosting
+open Microsoft.Extensions.DependencyInjection
+open Microsoft.Extensions.Logging
+
+let [<EntryPoint>] main args =
+    let env_def = {|
+        port = 13805
+        |}
+    let env = (env_def, args) ||> Array.fold (fun s x ->
+        match x.Split('=') with
+        | [|"port"; x|] -> {|s with port = Int32.Parse(x)|}
+        | _ -> failwithf "Invalid command line argument received when starting up the server.\nGot: %A" x
+        )
+
+    let uri_server = $"http://localhost:{env.port}"
+
+    printfn "Server bound to: %s" uri_server
+    printfn $"pwd: {System.Environment.CurrentDirectory}"
+    printfn $"dll_path: {dll_path}"
+
+    let builder = WebApplication.CreateBuilder()
+    builder.Logging.SetMinimumLevel LogLevel.Warning |> ignore
+    builder.Services
+        .AddCors()
+        .AddSignalR(fun x -> x.EnableDetailedErrors <- true) |> ignore
+
+    builder.Services
+        .AddSingleton<Supervisor>(fun s ->
+            let hub = s.GetService<IHubContext<SpiralHub>>()
+            let broadcast x = hub.Clients.All.SendCoreAsync("ServerToClientMsg",[|Json.serialize x|])
+
+            let error_ch_create msg =
+                let x = Ch()
+                Hopac.server (Job.forever (Ch.take x >>= (msg >> fun (x : ClientErrorsRes) -> Hopac.Job.awaitUnitTask (broadcast x))))
+                x
+
+            let errors : SupervisorErrorSources = {
+                fatal = error_ch_create FatalError
+                package = error_ch_create PackageErrors
+                tokenizer = error_ch_create TokenizerErrors
+                parser = error_ch_create ParserErrors
+                typer = error_ch_create TypeErrors
+                traced = error_ch_create TracedError
+                }
+            let supervisor = Ch()
+            let atten = Ch()
+
+            do Hopac.server (attention_server errors atten)
+            do Hopac.start (supervisor_server atten errors supervisor)
+            {supervisor_ch=supervisor}
+            ) |> ignore
+    builder.WebHost.UseUrls [|uri_server|] |> ignore
+    let app = builder.Build()
+    app.UseCors(fun x ->
+        x.SetIsOriginAllowed(fun _ -> true)
+            .AllowAnyHeader()
+            .AllowAnyMethod()
+            .AllowCredentials() |> ignore
+        ) |> ignore
+    app.MapHub<SpiralHub>("") |> ignore
 
     if Directory.Exists supervisor_dir then
         [trace_dir; commands_dir; old_dir]
@@ -562,7 +584,13 @@ let [<EntryPoint>] main args =
 
         Directory.EnumerateFiles commands_dir |> Seq.iter File.Delete
 
-        let stream, _disposable = watchDirectory false commands_dir
+        let stream, _disposable = FileSystem.watchDirectory false commands_dir
+
+        let connection = HubConnectionBuilder().WithUrl(uri_server).Build()
+        connection.StartAsync() |> Async.AwaitTask |> Async.Start
+        // let _ = connection.On<string>("ServerToClientMsg", fun x ->
+        //     printfn $"ServerToClientMsg: '{x}'"
+        // )
 
         stream
         |> FSharp.Control.AsyncSeq.iterAsyncParallel (fun (ticks, event) -> async {
@@ -570,49 +598,21 @@ let [<EntryPoint>] main args =
             trace Verbose (fun () -> "watchDirectory / iterAsyncParallel") getLocals
 
             match event with
-            | FileSystemChange.Created (path, _) ->
+            | FileSystem.FileSystemChange.Created (path, _) ->
                 let fullPath = commands_dir </> path
                 if File.Exists fullPath then
-                    let json = File.ReadAllText fullPath
-                    let x = Json.deserialize json
-                    async {
-                        x |> run (NetMQFrame.Empty) (NetMQMessage()) (Some path)
-                    }
-                    |> Async.Start
+                    let! json = FileSystem.readAllTextAsync fullPath
+                    let! result = connection.InvokeAsync<string>("ClientToServerMsg", json) |> Async.AwaitTask
+                    let oldPath = old_dir </> path
+                    File.Move (fullPath, oldPath)
+                    if result |> String.trim |> String.length > 0 then
+                        let resultPath = old_dir </> $"{Path.GetFileNameWithoutExtension path}_result.json"
+                        do! result |> FileSystem.writeAllTextAsync resultPath
             | _ -> ()
         })
-        |> Async.StartImmediate
+        |> Async.StartChild
+        |> Async.Ignore
+        |> Async.Start
 
-
-    use __ = server.ReceiveReady.Subscribe(fun s ->
-        let msg = server.ReceiveMultipartMessage(3)
-        let address = msg.Pop()
-        msg.Pop() |> ignore
-        let json = msg.Pop().Buffer
-        let json = Text.Encoding.Default.GetString json
-        let x = Json.deserialize json
-        match x with
-        | Ping _ -> ()
-        | _ ->
-            if Directory.Exists trace_dir then
-                let req_name = x.GetType().Name
-                let trace_file = trace_dir </> $"{DateTimeOffset.Now:yyyy_MM_dd_HH_mm_ss_fff}_{req_name}.json"
-                File.WriteAllText (trace_file, json)
-
-        run address msg None x)
-
-    use client = new PublisherSocket()
-    client.Bind(uri_client)
-
-    printfn "Server bound to: %s & %s" uri_server uri_client
-    printfn $"pwd: {System.Environment.CurrentDirectory}"
-    printfn $"dll_path: {dll_path}"
-
-    use __ = queue_client.ReceiveReady.Subscribe(fun x ->
-        x.Queue.Dequeue() |> Json.serialize |> client.SendFrame
-        )
-
-    use __ = queue_server.ReceiveReady.Subscribe(fun x -> x.Queue.Dequeue() |> server.SendMultipartMessage)
-    //Hopac.start (Job.foreverServer (Utils.print_ch >>- printfn "%s"))
-    poller.Run()
+    app.Run()
     0
