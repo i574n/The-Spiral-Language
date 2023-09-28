@@ -552,7 +552,7 @@ let [<EntryPoint>] main args =
     builder.Logging.SetMinimumLevel LogLevel.Warning |> ignore
     builder.Services
         .AddCors()
-        .AddSignalR(fun x -> x.EnableDetailedErrors <- true) |> ignore
+        .AddSignalR(fun x -> x.EnableDetailedErrors <- true; x.MaximumReceiveMessageSize <- Nullable ()) |> ignore
 
     builder.Services
         .AddSingleton<Supervisor>(fun s ->
