@@ -115,8 +115,6 @@ inl layout_is x = !!!!LayoutIs(x)
 inl nominal_is x = !!!!NominalIs(x)
 // Returns boolean whether the term is a function.
 inl function_is x = !!!!FunctionIs(x)
-// Strips the nominal wrapper from the value.
-inl nominal_strip x = !!!!NominalStrip(x)
 // Returns boolean whether the type has the relevant prototype.
 inl prototype_has forall t. prot = !!!!PrototypeHas(prot, `t)
 // Returns boolean whether the float is a Nan.
@@ -193,6 +191,40 @@ inl function_term_slots_set a b = !!!!FunctionTermSlotsSet(a,b)
 // Gets the free vars of a term as a tuple.
 inl free_vars x = !!!!FreeVars(x)
 
+// Returns the i32 tag of an union.
+inl union_tag x = !!!!UnionTag(x)
+
+// Takes in a tag and an union type and passes the key/value pair of the union at that tag into the success case.
+// When the tag is a runtime variable it iterates through all the cases in turn.
+inl union_untag forall t. x on_succ on_fail = !!!!UnionUntag(`t,x,on_succ,on_fail)
+
+// Converts an union type to a type record.
+inl union_to_record forall t. on_succ = !!!!UnionToRecord(`t,on_succ)
+
+// Strips the nominal wrapper from the value.
+inl nominal_strip x = !!!!NominalStrip(x)
+
+// Creates a nominal or an union type based on the input.
+inl nominal_create forall t. x = !!!!NominalCreate(x, `t)
+
+// Converts a nominal to a different equivalent type. `sa (add 2 2) i32` to `sa 4 i32` for example. It will give an error if the type is not equivalent.
+inl nominal_recreate forall t. x = !!!!NominalCreate(!!!!NominalStrip(x), `t)
+
+// It unboxes an arbitrary union type. Passes the resulting key/value pair into success branch.
+inl unbox x on_succ = !!!!Unbox(x,on_succ)
+
+// Converts a type symbol to a term symbol.
+inl type_to_symbol forall t. = !!!!TypeToSymbol(`t)
+
+// Converts a string literal to a symbol.
+inl string_lit_to_symbol x = !!!!StringLitToSymbol(x)
+
+// Converts a type literal or a symbol into their term equivalent representation.
+inl type_lit_to_lit forall t. = !!!!TypeLitToLit(`t)
+
+// Converts a literal or a symbol into their type equivalent representation.
+inl lit_to_type_lit x = !!!!LitToTypeLit(x)
+
 // Structural polymorphic equality for every type in the language (apart from functions.)
 inl rec (=) a b =
     match a, b with
@@ -218,34 +250,6 @@ inl (=) a b = if `(`(a)) `= `(`(b)) then a = b else error_type "The variables co
 
 // Structural polymorphic inequality for every type in the language (apart from functions.)
 inl (<>) a b = (a = b) <> true
-
-// Returns the i32 tag of an union.
-inl union_tag x = !!!!UnionTag(x)
-
-// Takes in a tag and an union type and passes the key/value pair of the union at that tag into the success case.
-// When the tag is a runtime variable it iterates through all the cases in turn.
-inl union_untag forall t. x on_succ on_fail = !!!!UnionUntag(`t,x,on_succ,on_fail)
-
-// Converts an union type to a type record.
-inl union_to_record forall t. on_succ = !!!!UnionToRecord(`t,on_succ)
-
-// Creates a nominal or an union type based on the input.
-inl nominal_create forall t. x = !!!!NominalCreate(x, `t)
-
-// It unboxes an arbitrary union type. Passes the resulting key/value pair into success branch.
-inl unbox x on_succ = !!!!Unbox(x,on_succ)
-
-// Converts a type symbol to a term symbol.
-inl type_to_symbol forall t. = !!!!TypeToSymbol(`t)
-
-// Converts a string literal to a symbol.
-inl string_lit_to_symbol x = !!!!StringLitToSymbol(x)
-
-// Converts a type literal or a symbol into their term equivalent representation.
-inl type_lit_to_lit forall t. = !!!!TypeLitToLit(`t)
-
-// Converts a literal or a symbol into their type equivalent representation.
-inl lit_to_type_lit x = !!!!LitToTypeLit(x)
 
 // Structural polymorphic comparison for every type in the language (apart from functions.)
 inl rec comp a b =
@@ -277,29 +281,3 @@ inl rec comp a b =
 
 // Structural polymorphic comparison for every type in the language (apart from functions.)
 inl comp a b = if `(`(a)) `= `(`(b)) then comp a b else error_type "The variables compared have to have the same type."
-
-// Structural polymorphic hashing for every type in the language (apart from functions.)
-inl hash_template prim tag_conv zero one max_half seed x = 
-    inl rec f = function
-        | (a, a') => f a * seed + f a'
-        | {} & a => inl s,_ = record_fold_back (fun {state=(s,seed') key value} => s + value * seed', seed * seed') a (zero, one) in s
-        | () => zero
-        | a => 
-            if symbol_is a then zero
-            elif layout_is a then f *a
-            elif union_is a then
-                inl body () = 
-                    if prototype_has `(`a) hashable then hashable `(`a) a
-                    else !!!!Unbox(a,(fun (k,a') => (max_half + f a') * seed * (one + tag_conv (union_tag a))))
-                if heap_union_is a && var_is a then (join body()) : `zero
-                else body()
-            elif nominal_is a then
-                if prototype_has `(`a) hashable then hashable `(`a) a
-                else f (nominal_strip a)
-            elif prim_is a then prim a
-            elif prototype_has `(`a) hashable then hashable `(`a) a
-            else error_type "The input must be hashable."
-    f x
-
-inl hash_fsharp x = hash_template (fun x => $"hash !x" : i32) id 0 1 (limit.min `i32 / 2i32) 31 x
-inl hash_cython x = hash_template (fun x => $"hash(!x)" : u64) (fun x => $"!x" : u64) 0u64 1u64 (limit.max `u64 / 2u64) 9973u64 x

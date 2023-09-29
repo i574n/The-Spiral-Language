@@ -155,18 +155,21 @@ let codegen' (env : PartEvalResult) (x : TypedBind []) =
                     match a with
                     | TyMacro a ->
                         let m = a |> List.map (function CMText x -> x | CMTerm x -> tup_data x | CMType x -> tup_ty x | CMTypeLit x -> type_lit x) |> String.concat ""
-                        let q = m.Split("v$")
-                        if q.Length = 1 then 
-                            decl_vars |> line' s
-                            return_local s d m 
+                        if m.StartsWith("#pragma") then
+                            line s m
                         else
-                            if d.Length = q.Length-1 then
-                                let w = StringBuilder(m.Length+8)
-                                let tag (L(i,_)) = i : int
-                                Array.iteri (fun i v -> w.Append(q.[i]).Append('v').Append(tag v) |> ignore) d
-                                w.Append(q.[d.Length]).Append(';').ToString() |> line s
+                            let q = m.Split("v$")
+                            if q.Length = 1 then 
+                                decl_vars |> line' s
+                                return_local s d m 
                             else
-                                raise_codegen_error "The special v$ macro requires the same number of free vars in its binding as there are v$ in the code."
+                                if d.Length = q.Length-1 then
+                                    let w = StringBuilder(m.Length+8)
+                                    let tag (L(i,_)) = i : int
+                                    Array.iteri (fun i v -> w.Append(q.[i]).Append('v').Append(tag v) |> ignore) d
+                                    w.Append(q.[d.Length]).Append(';').ToString() |> line s
+                                else
+                                    raise_codegen_error "The special v$ macro requires the same number of free vars in its binding as there are v$ in the code."
                     | TyArrayLiteral(a,b') -> 
                         let inits = List.map tup_data b' |> String.concat "," |> sprintf "{%s}"
                         match d with
@@ -247,7 +250,7 @@ let codegen' (env : PartEvalResult) (x : TypedBind []) =
         | LitUInt32 x -> sprintf "%iul" x
         | LitUInt64 x -> sprintf "%iull" x
         | LitFloat32 x -> 
-            if x = infinityf then "HUGE_VALF" // nan/inf macros are defined in math.h
+            if x = infinityf then "HUGE_VALF" // nan/inf macros are defined in cmath
             elif x = -infinityf then "-HUGE_VALF"
             elif Single.IsNaN x then "NAN"
             else x.ToString("R") |> add_dec_point |> sprintf "%sf"
@@ -379,9 +382,6 @@ let codegen' (env : PartEvalResult) (x : TypedBind []) =
         | TyStringLength(_,b) -> raise_codegen_error "String length is not supported in the HLS C++ backend."
         | TyOp(Global,[DLit (LitString x)]) -> global' x
         | TyOp(op,l) ->
-            let float_suffix = function
-                | DV(L(_,YPrim Float32T)) | DLit(LitFloat32 _) -> "f"
-                | _ -> ""
             match op, l with
             | Dyn,[a] -> tup_data a
             | TypeToVar, _ -> raise_codegen_error "The use of `` should never appear in generated code."
@@ -402,7 +402,7 @@ let codegen' (env : PartEvalResult) (x : TypedBind []) =
             | Mult, [a;b] -> sprintf "%s * %s" (tup_data a) (tup_data b)
             | Div, [a;b] -> sprintf "%s / %s" (tup_data a) (tup_data b)
             | Mod, [a;b] -> sprintf "%s %% %s" (tup_data a) (tup_data b)
-            | Pow, [a;b] -> sprintf "pow%s(%s,%s)" (float_suffix a) (tup_data a) (tup_data b)
+            | Pow, [a;b] -> sprintf "pow(%s,%s)" (tup_data a) (tup_data b)
             | LT, [a;b] -> sprintf "%s < %s" (tup_data a) (tup_data b)
             | LTE, [a;b] -> sprintf "%s <= %s" (tup_data a) (tup_data b)
             | EQ, [a;b] | NEQ, [a;b] | GT, [a;b] | GTE, [a;b] when is_string a -> raise_codegen_error "String comparison operations are not supported in the HLS C++ backend."
@@ -420,11 +420,13 @@ let codegen' (env : PartEvalResult) (x : TypedBind []) =
             | ShiftRight, [a;b] -> sprintf "%s >> %s" (tup_data a) (tup_data b)
 
             | Neg, [x] -> sprintf "-%s" (tup_data x)
-            | Log, [x] -> import "math.h"; sprintf "log%s(%s)" (float_suffix x) (tup_data x)
-            | Exp, [x] -> import "math.h"; sprintf "exp%s(%s)" (float_suffix x) (tup_data x)
-            | Tanh, [x] -> import "math.h"; sprintf "tanh%s(%s)" (float_suffix x) (tup_data x)
-            | Sqrt, [x] -> import "math.h"; sprintf "sqrt%s(%s)" (float_suffix x) (tup_data x)
-            | NanIs, [x] -> import "math.h"; sprintf "isnan(%s)" (tup_data x)
+            | Log, [x] -> import "cmath"; sprintf "log(%s)" (tup_data x)
+            | Exp, [x] -> import "cmath"; sprintf "exp(%s)" (tup_data x)
+            | Tanh, [x] -> import "cmath"; sprintf "tanh(%s)" (tup_data x)
+            | Sqrt, [x] -> import "cmath"; sprintf "sqrt(%s)" (tup_data x)
+            | Sin, [x] -> import "cmath"; sprintf "sin(%s)" (tup_data x)
+            | Cos, [x] -> import "cmath"; sprintf "cos(%s)" (tup_data x)
+            | NanIs, [x] -> import "cmath"; sprintf "isnan(%s)" (tup_data x)
             | UnionTag, [DV(L(i,YUnion l)) as x] -> 
                 match l.Item.layout with
                 | UHeap -> "->tag"

@@ -1,0 +1,199 @@
+nominal random_device = $"std::random_device"
+nominal mt = $"std::mt19937"
+nominal uint_dist = $"std::uniform_int_distribution<`mt::result_type>"
+
+nominal rng = mt * uint_dist
+
+// Makes an inclusive distribtion with an (inclusive) [from,to] range.
+inl make_dist (from, to : i32 * i32) : rng =
+    inl dev = $"`random_device v$" : random_device
+    inl mt = $"`mt v$(!dev())" : mt
+    inl dist = $"`uint_dist v$(!from,!to)" : uint_dist
+    rng (mt,dist)
+
+inl get_int (rng (mt,dist)) : i32 = $"!dist(!mt)"
+
+let test_random() =
+    inl d = make_dist (0,100)
+    get_int d
+
+open corehls
+
+nominal lfsr dim = ap_uint dim
+
+inl pragma_pipeline (ii : i32) : () = $"#pragma HLS PIPELINE II=!ii"
+
+let random_ap forall dim. (lfsr rng : lfsr 128) : ap_uint dim * lfsr 128 =
+    pragma_pipeline 1
+    open ap_uintm
+    inl out = $"0"
+    inl rng =
+        loop.for {from=0; nearTo=length out} (fun i rng =>
+            inl f = index rng
+            inl newbit = (f 0u8 ^^^ f 1) ^^^ (f 2 ^^^ f 7)
+            set out i newbit
+            inl rng = shift_right' rng 1
+            set rng 127u8 newbit
+            rng
+            ) rng
+    
+    out, lfsr rng
+
+let random_ap_in_range forall dim. {from nearTo} rng : ap_uint dim * _ =
+    pragma_pipeline 1
+    open ap_uintm
+    open type_arith
+    inl l : ap_uint dim = nearTo -. from
+    inl (r : ap_uint (add dim 30)), rng = random_ap rng
+    r %. l +. from, rng
+
+// inl default() : lfsr 128 = 
+//     inl out = $"1"
+//     ap_uintm.set out 127 $"1"
+//     lfsr out
+
+inl default() : lfsr 128 = // 285321827306898791209647125482703629360
+    open ap_uintm
+    inl a : ap_uint 64 = $"0b1101011010100110111111000010111101111111100001011011100001111110"
+    inl b : ap_uint 64 = $"0b1000001110011100000101101011010000000100101010110010110000110000"
+    lfsr (concat a b |> nominal_recreate)
+
+// When is_exclusive is true samples from: (0,1)
+// Otherwise it samples from: [0,1)
+let random_f32_template (is_exclusive : bool) rng : f32 * lfsr 128 =
+    pragma_pipeline 1
+    global "#include <cstring>"
+    open ap_uintm
+    inl (frac : ap_uint 23), rng = 
+        inl (frac : ap_uint 22), rng = random_ap rng
+        inl start, rng = if is_exclusive then ($"1" : ap_uint 1), rng else random_ap rng
+        concat frac start |> nominal_recreate, rng
+
+    inl exp : ap_uint 8 = $"127"
+    inl sign : ap_uint 1 = $"0b0"
+    inl x : ap_uint 32 = concat sign (concat exp frac) |> nominal_recreate
+    inl x : u32 = $'static_cast<`u32>(!x)'
+    inl ~r : f32 = 0
+    $'static_assert(sizeof(`u32) == sizeof(`f32), "float has a weird size")'
+    $"std::memcpy(&!r,&!x,sizeof(`f32))"
+    r - 1, rng
+
+inl random_uniform_f32 rng : f32 * lfsr 128 = random_f32_template false rng
+
+let random_gaussian_f32 {mean std} rng : f32 * lfsr 128 =
+    pragma_pipeline 1
+    inl u0,rng = random_f32_template true rng
+    inl u1,rng = random_f32_template false rng
+    // Both cos and sin can be used interchangeably here.
+    std * sqrt(-2.0 * log u0) * cos(2.0 * pi * u1) + mean, rng
+
+let random_i32 {from nearTo} rng : i32 * lfsr 128 =
+    pragma_pipeline 1
+    inl (x : ap_uint 32), rng = random_ap rng
+    inl x : i32 = $'static_cast<`i32>(!x)'
+    x, rng
+
+// Samples an index from an a mask array. Returns the first non masked index at the specified count.
+let sample forall dim dim'. (mask : ap_uint dim) rng =
+    pragma_pipeline 1
+    open ap_uintm
+    inl nearTo : u32 = loop.for {from=0; nearTo=length mask} (fun i s => if bool (index mask i) then s else s+1) 0
+    inl (c : ap_uint dim'),rng = random_ap_in_range {from= $"0"; nearTo= #nearTo} rng
+    inl (i : ap_uint dim'),_ =
+        loop.for {from=0; nearTo=length mask} (fun i (_,c as state) =>
+            if c >. #0u32 then 
+                #i, if bool (index mask i) then c else dec c
+            else state
+            ) (#0u32, inc c)
+    mask ||| ($"1" <<< i), i, rng
+
+let draw_card (deck : ap_uint 52) rng =
+    pragma_pipeline 1
+    open real_utils
+    open ap_uintm
+    inl deck,(i : ap_uint 6),rng = sample deck rng
+    inl card = card {rank = i %. $"13"; suit = i /. $"13"}
+    deck, card, rng
+
+type n = 10
+type n2 = 1024
+inl test1 () =
+    global "#include <iostream>"
+    global "#include <bitset>"
+    open sam
+    inl hist : sa n2 i32 = init (fun _ => 0)
+
+    inl rng =
+        loop.for {from=0i32; nearTo=1_000_000} (fun i rng =>
+            inl r, rng : ap_uint 10 * _ = random_ap rng
+            inl i = $"(int) !r"
+            set hist i (index hist i + 1)
+            rng
+            ) default()
+    
+    iter (fun r => $"std::cout << !r << std::endl") hist
+    inl sum = fold (+) 0 hist
+    $'std::cout << "The sum is: " << !sum << std::endl'
+    $'std::cout << "The rng is: " << !rng << std::endl'
+    ()
+
+
+inl test2 () =
+    global "#include <iostream>"
+    inl rng =
+        loop.for {from=0i32; nearTo=1_000} (fun i rng =>
+            inl r, rng = random_gaussian_f32 {mean=0; std=1} rng
+            $'std::cout << !r << std::endl'
+            rng
+            ) default()
+    ()
+
+inl test3 () =
+    global "#include <iostream>"
+    inl rng =
+        loop.for {from=0i32; nearTo=1_000} (fun i rng =>
+            inl _,rng =
+                inl r = {from=0i32; nearTo=4}
+                loop.for r (fun _ (mask, rng : ap_uint 4 * _) => 
+                    global "#include <bitset>"
+                    open ap_uintm
+                    inl mask,(i : ap_uint 3),rng = sample mask rng
+                    inl len = length mask
+                    $'std::cout << std::bitset<!len>(!mask) << std::endl'
+                    $'std::cout << !i << std::endl'
+                    $'std::cout << "---" << std::endl'
+                    mask, rng
+                    ) ($"0", rng)
+            $'std::cout << "***" << std::endl'
+            rng
+            ) default()
+    ()
+
+inl test4 () =
+    global "#include <iostream>"
+    inl rng =
+        loop.for {from=0i32; nearTo=1_000} (fun i rng =>
+            inl _,rng =
+                inl r = {from=0i32; nearTo=7}
+                loop.for r (fun _ (deck, rng) => 
+                    global "#include <bitset>"
+                    open real_utils
+                    open ap_uintm
+                    inl deck,(card {suit rank}),rng = draw_card deck rng
+                    inl len = length deck
+                    $'std::cout << std::bitset<!len>(!deck) << std::endl'
+                    $'std::cout << "Suit: " << !suit << " Rank: " << !rank << std::endl'
+                    $'std::cout << "---" << std::endl'
+                    deck, rng
+                    ) ($"0", rng)
+            $'std::cout << "***" << std::endl'
+            rng
+            ) default()
+    ()
+
+inl main() =
+    // test1()
+    // test2()
+    // test3()
+    test4()
+    0i32
