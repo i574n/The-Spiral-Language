@@ -497,7 +497,7 @@ type SpiralHub(supervisor : Supervisor) =
                         let trace_file = trace_dir </> $"{DateTimeOffset.Now:yyyy_MM_dd_HH_mm_ss_fff}_{req_name}.json"
                         do! x |> FileSystem.writeAllTextAsync trace_file
                     with ex ->
-                        trace Critical (fun () -> "ClientToServerMsg / ex: {ex |> printException}") getLocals
+                        trace Critical (fun () -> $"ClientToServerMsg / ex: {ex |> printException}") getLocals
                 }
                 |> Async.Start
 
