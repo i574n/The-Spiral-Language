@@ -341,9 +341,9 @@ let codegen (env : PartEvalResult) (x : TypedBind []) =
             | Exp, [x] -> sprintf "exp %s" (tup x)
             | Tanh, [x] -> sprintf "tanh %s" (tup x)
             | Sqrt, [x] -> sprintf "sqrt %s" (tup x)
-            | NanIs, [x] -> 
             | Sin, [x] -> sprintf "sin %s" (tup x)
             | Cos, [x] -> sprintf "cos %s" (tup x)
+            | NanIs, [x] ->
                 match x with
                 | DLit(LitFloat32 _) | DV(L(_,YPrim Float32T)) -> sprintf "System.Single.IsNaN(%s)" (tup x)
                 | DLit(LitFloat64 _) | DV(L(_,YPrim Float64T)) -> sprintf "System.Double.IsNaN(%s)" (tup x)
