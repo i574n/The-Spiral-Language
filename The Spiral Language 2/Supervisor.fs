@@ -492,6 +492,7 @@ type SpiralHub(supervisor : Supervisor) =
             | Ping _ -> ()
             | _ ->
                 async {
+                    do! Async.Sleep 10
                     try
                         let req_name = client_req.GetType().Name
                         let trace_file = trace_dir </> $"{DateTimeOffset.Now:yyyy_MM_dd_HH_mm_ss_fff}_{req_name}.json"
