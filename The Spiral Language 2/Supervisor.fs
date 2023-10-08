@@ -218,6 +218,16 @@ type BuildResult =
     | BuildFatalError of string
     | BuildSkip
 
+open Polyglot
+open Polyglot.Common
+open Polyglot.FileSystem.Operators
+open Microsoft.AspNetCore.SignalR.Client
+
+let dll_path = Reflection.Assembly.GetExecutingAssembly().Location |> System.IO.Path.GetDirectoryName
+let supervisor_dir = dll_path </> "supervisor"
+let trace_dir = supervisor_dir </> "trace"
+let commands_dir = supervisor_dir </> "commands"
+let old_dir = supervisor_dir </> "old"
 let dir uri = FileInfo(Uri(uri).LocalPath).Directory.FullName
 let file uri = FileInfo(Uri(uri).LocalPath).FullName
 let supervisor_server atten (errors : SupervisorErrorSources) req =
@@ -389,6 +399,18 @@ let supervisor_server atten (errors : SupervisorErrorSources) req =
                             | :? PartEval.Main.TypeError as e -> BuildErrorTrace(show_trace s e.Data0 e.Data1)
                             | :? CodegenUtils.CodegenError as e -> BuildFatalError(e.Data1)
                             | :? CodegenUtils.CodegenErrorWithPos as e -> BuildErrorTrace(show_trace s e.Data0 e.Data1)
+                            | ex ->
+                                if Directory.Exists trace_dir then
+                                    let trace_file = trace_dir </> $"{DateTimeOffset.Now:yyyy_MM_dd_HH_mm_ss_fff}_error.json"
+                                    async {
+                                        try
+                                            do! $"{ex}" |> FileSystem.writeAllTextAsync trace_file
+                                        with ex ->
+                                            trace Critical (fun () -> $"file_build / ex: {ex |> printException}") getLocals
+                                    }
+                                    |> Async.Start
+                                trace Critical (fun () -> $"file_build / ex: {ex |> printException}") getLocals
+                                BuildFatalError(ex.Message)
                     | None ->
                         // BuildFatalError $"Cannot find `main` in file {Path.GetFileNameWithoutExtension file}."
                         printfn $"Cannot find `main` in file {Path.GetFileNameWithoutExtension file}."
@@ -452,22 +474,10 @@ type ClientErrorsRes =
 open Microsoft.AspNetCore.SignalR
 open FSharp.Json
 
-open Polyglot
-open Polyglot.Common
-open Polyglot.FileSystem.Operators
-open Microsoft.AspNetCore.SignalR.Client
-
 
 type Supervisor = {
     supervisor_ch : SupervisorReq Ch
     }
-
-
-let dll_path = System.Reflection.Assembly.GetExecutingAssembly().Location |> System.IO.Path.GetDirectoryName
-let supervisor_dir = dll_path </> "supervisor"
-let trace_dir = supervisor_dir </> "trace"
-let commands_dir = supervisor_dir </> "commands"
-let old_dir = supervisor_dir </> "old"
 
 
 type SpiralHub(supervisor : Supervisor) =
@@ -491,11 +501,11 @@ type SpiralHub(supervisor : Supervisor) =
             match client_req with
             | Ping _ -> ()
             | _ ->
+                let req_name = client_req.GetType().Name
+                let trace_file = trace_dir </> $"{DateTimeOffset.Now:yyyy_MM_dd_HH_mm_ss_fff}_{req_name}.json"
                 async {
-                    do! Async.Sleep 10
+                    do! Async.Sleep 500
                     try
-                        let req_name = client_req.GetType().Name
-                        let trace_file = trace_dir </> $"{DateTimeOffset.Now:yyyy_MM_dd_HH_mm_ss_fff}_{req_name}.json"
                         do! x |> FileSystem.writeAllTextAsync trace_file
                     with ex ->
                         trace Critical (fun () -> $"ClientToServerMsg / ex: {ex |> printException}") getLocals

@@ -430,10 +430,39 @@ type PartEvalResult = {
     nominal_apply : Ty -> Ty
     }
 
+open Polyglot.FileSystem.Operators
+let dll_path = Reflection.Assembly.GetExecutingAssembly().Location |> System.IO.Path.GetDirectoryName
+let supervisor_dir = dll_path </> "supervisor"
+let trace_dir = supervisor_dir </> "trace"
+
+let spiral_ex_dir = IO.Path.GetTempPath () </> "!spiral-ex"
+let max_term_count_path = spiral_ex_dir </> "max_term_count.txt"
+let term_count_trace_path = spiral_ex_dir </> "term_count_trace.txt"
+
+
 let peval (env : TopEnv) (x : E) =
     let join_point_method = Dictionary(HashIdentity.Reference)
     let join_point_closure = Dictionary(HashIdentity.Reference)
     let join_point_type = Dictionary(HashIdentity.Reference)
+
+    let mutable term_count = 0
+    let inc_term_count =
+        if max_term_count_path |> IO.File.Exists |> not
+        then None
+        else
+            let max_term_count = System.IO.File.ReadAllText max_term_count_path |> int
+            let trace_file =
+                if IO.File.Exists term_count_trace_path && IO.Directory.Exists trace_dir
+                then trace_dir </> $"{DateTimeOffset.Now:yyyy_MM_dd_HH_mm_ss_fff}_term_count" |> Some
+                else None
+            fun () ->
+                term_count <- term_count + 1
+                match trace_file with
+                | Some trace_file -> System.IO.File.WriteAllText (trace_file, string term_count)
+                | None -> ()
+                if term_count > max_term_count then
+                    exn "Stack limit" |> raise
+            |> Some
 
     let rec ty_to_data s x =
         let f = ty_to_data s
@@ -653,6 +682,9 @@ let peval (env : TopEnv) (x : E) =
         | TArray a -> YArray(ty s a)
         | TLayout(a,b) -> YLayout(ty s a,b)
     and term (s : LangEnv) x = 
+        match inc_term_count with
+        | Some inc_term_count -> inc_term_count ()
+        | None -> ()
         let term2 s a b = term s a, term s b
         let term3 s a b c = term s a, term s b, term s c
         let type_apply s a b =
