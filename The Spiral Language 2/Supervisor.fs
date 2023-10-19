@@ -606,7 +606,12 @@ let [<EntryPoint>] main args =
 
         Directory.EnumerateFiles commands_dir |> Seq.iter File.Delete
 
-        let stream, _disposable = FileSystem.watchDirectory false commands_dir
+        let stream, _disposable =
+            commands_dir
+            |> FileSystem.watchDirectory (function
+                | FileSystem.FileSystemChange.Created _ -> true
+                | _ -> false
+            )
 
         let connection = HubConnectionBuilder().WithUrl(uri_server).Build()
         connection.StartAsync() |> Async.AwaitTask |> Async.Start
@@ -620,19 +625,17 @@ let [<EntryPoint>] main args =
             trace Verbose (fun () -> "watchDirectory / iterAsyncParallel") getLocals
 
             match event with
-            | FileSystem.FileSystemChange.Created (path, _) ->
-                let fullPath = commands_dir </> path
-                if File.Exists fullPath then
-                    try
-                        let! json = FileSystem.readAllTextAsync fullPath
-                        let! result = connection.InvokeAsync<string>("ClientToServerMsg", json) |> Async.AwaitTask
-                        let oldPath = old_dir </> path
-                        File.Move (fullPath, oldPath)
-                        if result |> String.trim |> String.length > 0 then
-                            let resultPath = old_dir </> $"{Path.GetFileNameWithoutExtension path}_result.json"
-                            do! result |> FileSystem.writeAllTextAsync resultPath
-                    with ex ->
-                        trace Critical (fun () -> "watchDirectory / iterAsyncParallel / ex: {ex |> printException}") getLocals
+            | FileSystem.FileSystemChange.Created (path, Some json) ->
+                try
+                    let fullPath = commands_dir </> path
+                    let! result = connection.InvokeAsync<string>("ClientToServerMsg", json) |> Async.AwaitTask
+                    let oldPath = old_dir </> path
+                    do! fullPath |> FileSystem.moveFileAsync oldPath |> Async.Ignore
+                    if result |> String.trim |> String.length > 0 then
+                        let resultPath = old_dir </> $"{Path.GetFileNameWithoutExtension path}_result.json"
+                        do! result |> FileSystem.writeAllTextAsync resultPath
+                with ex ->
+                    trace Critical (fun () -> "watchDirectory / iterAsyncParallel / ex: {ex |> printException}") getLocals
             | _ -> ()
         })
         |> Async.StartChild
