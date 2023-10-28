@@ -27,12 +27,12 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <Compile Include="../../../nbs/Common.fs" />
-    <Compile Include="../../../nbs/CommonFSharp.fs" />
-    <Compile Include="../../../nbs/Async.fs" />
-    <Compile Include="../../../nbs/AsyncSeq.fs" />
-    <Compile Include="../../../nbs/Runtime.fs" />
-    <Compile Include="../../../nbs/FileSystem.fs" />
+    <Compile Include="../../../lib/fsharp/Common.fs" />
+    <Compile Include="../../../lib/fsharp/CommonFSharp.fs" />
+    <Compile Include="../../../lib/fsharp/Async.fs" />
+    <Compile Include="../../../lib/fsharp/AsyncSeq.fs" />
+    <Compile Include="../../../lib/fsharp/Runtime.fs" />
+    <Compile Include="../../../lib/fsharp/FileSystem.fs" />
 
     <None Include="Script1.fsx" />
     <Compile Include="PersistentVectorExtensions.fs" />
