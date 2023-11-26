@@ -1,3 +1,15 @@
+2.5.1 (11/3/2023)
+
+* Removed the Python backend.
+
+2.5.0 (11/3/2023)
+
+Implemented the Python + Cuda backend.
+
+* Replaced the HLC C++ backend with a Cuda C++ one.
+* The inbuilt arrays have been renamed to array_base and the array literals are now automatically wrapped in an `array` call.
+* Removed the UPMEM backend.
+
 2.4.25 (10/1/2023)
 
 * Changed the parser so the join point names are propagated better.

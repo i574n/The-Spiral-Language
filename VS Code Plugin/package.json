@@ -39,10 +39,9 @@
 					"type": "string",
 					"enum": [
 						"Fsharp",
-						"Python",
 						"C",
-						"UPMEM: Python + C",
-						"HLS C++"
+						"Python + Cuda",
+						"Cuda C++"
 					],
 					"default": "Fsharp",
 					"description": "The code generator to use when the file is built."

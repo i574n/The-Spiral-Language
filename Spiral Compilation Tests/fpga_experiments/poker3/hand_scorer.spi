@@ -79,8 +79,8 @@ instance partition_topk_pair sa = fun inp =>
     if i = length l then
         // Copies the input into r while avoiding the elements in l.
         loop.for' {from=0; nearTo=length r} (fun i =>
-            inl f gap_size = set r i (index inp (gap_size + i))
-            if i < pos+1-length l then f 0 else f (length l)
+            inl gap_size =  if i < pos+(1-length l) then 0 else length l
+            set r i (index inp (gap_size + i))
             )
         Some (l,r)
     else
@@ -132,16 +132,12 @@ instance sort sa = fun ar =>
 let score forall (ar : * -> * -> *) {sort; filter_take; try_straight_flush_for_suit; try_straight; max_hand; partition_topk_pair; take; merge_hands; merge_hands2} dim. 
         (hand : ar dim card) : hand_score ar 5 =
     pragma.pipeline {ii=1}
-    
     inl hand = sort hand
-
     inl high_card = take hand
-
     inl pair = 
         match partition_topk_pair hand with
         | Some ((pair : _ 2 _), rest) => Some (merge_hands pair (take rest : _ 3 _) |> nominal_recreate)
         | None => None
-
     inl two_pair =
         match partition_topk_pair hand with
         | Some ((pair1 : _ 2 _), rest) => 
@@ -149,16 +145,12 @@ let score forall (ar : * -> * -> *) {sort; filter_take; try_straight_flush_for_s
             | Some ((pair2 : _ 2 _), rest) => Some (merge_hands2 pair1 pair2 (take rest : _ 1 _) |> nominal_recreate)
             | None => None
         | None => None
-
     inl triple = 
         match partition_topk_pair hand with
         | Some ((trip : _ 3 _), rest) => Some (merge_hands trip (take rest : _ 2 _) |> nominal_recreate)
         | None => None
-
     inl straight = try_straight hand
-
     inl flush = listm.map (fun i => filter_take (fun a => suit a = #i) hand) [0;1;2;3] |> list_max_hand
-
     inl full_house =
         match partition_topk_pair hand with
         | Some ((trip : _ 3 _), rest) => 
@@ -166,16 +158,12 @@ let score forall (ar : * -> * -> *) {sort; filter_take; try_straight_flush_for_s
             | Some ((pair : _ 2 _), rest) => Some (merge_hands trip pair |> nominal_recreate)
             | None => None
         | None => None
-
     inl quad =
         match partition_topk_pair hand with
         | Some ((quad : _ 4 _), rest) => Some (merge_hands quad (take rest : _ 1 _) |> nominal_recreate)
         | None => None
-
     inl straight_flush = listm.map (fun i => try_straight_flush_for_suit #i hand) [0;1;2;3] |> list_max_hand 
-    
     inl rankings = [straight_flush; quad; full_house; flush; straight; triple; two_pair; pair]
-
     inl to_score score = function
         | Some hand => Some {score hand}
         | None => None

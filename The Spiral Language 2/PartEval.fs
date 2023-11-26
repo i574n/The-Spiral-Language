@@ -288,7 +288,7 @@ let show_ty x =
         | YRecord l -> sprintf "{%s}" (l |> Map.toList |> List.map (fun (k,v) -> sprintf "%s : %s" k (f -1 v)) |> String.concat "; ")
         | YUnion l -> sprintf "{%s}" (l.Item.cases |> Map.toList |> List.map (fun (k,v) -> sprintf "%s : %s" k (f -1 v)) |> String.concat " | ")
         | YPrim x -> show_primt x
-        | YArray a -> p 30 (sprintf "array %s" (f 30 a))
+        | YArray a -> p 30 (sprintf "array_base %s" (f 30 a))
         | YFun(a,b) -> p 20 (sprintf "%s -> %s" (f 20 a) (f 19 b))
         | YMacro a -> p 30 (List.map (function TypeLit a | Type a -> f -1 a | Text a -> a) a |> String.concat "")
         | YApply(a,b) -> p 30 (sprintf "%s %s" (f 29 a) (f 30 b))
@@ -1390,7 +1390,7 @@ let peval (env : TopEnv) (x : E) =
                         else raise_type_error s $"All the elements in the array literal have to be the type {show_ty el}.\nGot: {show_ty x_ty}"
                         ) a
                 push_typedop_no_rewrite s (TyArrayLiteral(el,a)) b
-            | b -> raise_type_error s $"Expected an array.\nGot: {show_ty b}"
+            | b -> raise_type_error s $"Expected an array_base.\nGot: {show_ty b}"
         | EOp(_,ArrayCreate,[EType(_,a);b]) ->
             let a,b = ty s a, term s b
             match data_to_ty s b with
@@ -1402,7 +1402,7 @@ let peval (env : TopEnv) (x : E) =
             let a = term s a
             match data_to_ty s a with
             | YArray _ -> push_typedop s (TyArrayLength(t,a)) t
-            | a -> raise_type_error s <| sprintf "Expected an array.\nGot: %s" (show_ty a)
+            | a -> raise_type_error s <| sprintf "Expected an array_base.\nGot: %s" (show_ty a)
         | EOp(_,ArrayIndex,[a;b]) ->
             match term s a with
             | DV(L(_,YArray ty)) & a ->
@@ -1410,7 +1410,7 @@ let peval (env : TopEnv) (x : E) =
                 match data_to_ty s b with
                 | bt when is_any_int bt -> push_binop_no_rewrite s ArrayIndex (a,b) ty
                 | b -> raise_type_error s <| sprintf "Expected an int as the index argumet.\nGot: %s" (show_ty b)
-            | a -> raise_type_error s <| sprintf "Expected an array.\nGot: %s" (show_data a)
+            | a -> raise_type_error s <| sprintf "Expected an array_base.\nGot: %s" (show_data a)
         | EOp(_,ArrayIndexSet,[a;b;c]) ->
             match term s a with
             | DV(L(_,YArray ty)) & a ->
@@ -1422,7 +1422,7 @@ let peval (env : TopEnv) (x : E) =
                     if ty' = ty then push_triop_no_rewrite s ArrayIndexSet (a,b,c) YB
                     else raise_type_error s <| sprintf "The array and the value being set do not have the same type.\nGot: %s\nExpected: %s" (show_ty ty') (show_ty ty)
                 | b -> raise_type_error s <| sprintf "Expected an int as the index argumet.\nGot: %s" (show_ty b)
-            | a -> raise_type_error s <| sprintf "Expected an array.\nGot: %s" (show_data a)
+            | a -> raise_type_error s <| sprintf "Expected an array_base.\nGot: %s" (show_data a)
         | EOp(_,RecordMap,[a;b]) ->
             match term2 s a b with
             | a, DRecord l -> Map.map (fun k v -> apply s (a, record2 ("key", DSymbol k) ("value", v))) l |> DRecord
