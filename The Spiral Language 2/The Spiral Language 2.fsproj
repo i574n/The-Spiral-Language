@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Project Sdk="Microsoft.NET.Sdk.Web">
   <PropertyGroup>
-    <TargetFramework>net8.0</TargetFramework>
+    <TargetFramework>net9.0</TargetFramework>
     <LangVersion>preview</LangVersion>
     <RollForward>Major</RollForward>
     <TargetLatestRuntimePatch>true</TargetLatestRuntimePatch>
@@ -68,7 +68,7 @@
     <PackageReference Include="FSharp.Json" Version="0.4.1" />
     <PackageReference Include="FSharpx.Collections" Version="3.1.0" />
     <PackageReference Include="Hopac" Version="0.5.1" />
-    <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" Version="8.0.0-rc.1.23421.29" />
+    <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" Version="8.0.2" />
 
     <PackageReference Include="Argu" Version="6.1.1" />
     <PackageReference Include="FSharp.Control.AsyncSeq" Version="3.2.1" />
@@ -77,7 +77,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Update="FSharp.Core" Version="8.0.100-beta.23418.2" />
+    <PackageReference Update="FSharp.Core" Version="8.0.300-beta.24080.5" />
   </ItemGroup>
 
 </Project>
