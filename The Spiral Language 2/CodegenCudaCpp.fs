@@ -3,6 +3,7 @@
 open Spiral
 open Spiral.Utils
 open Spiral.Tokenize
+open Spiral.Startup
 open Spiral.BlockParsing
 open Spiral.PartEval.Main
 open Spiral.CodegenUtils
@@ -304,6 +305,7 @@ let codegen' (env : PartEvalResult) (x : TypedBind []) =
                 sprintf "%s%i(%s)" (Option.defaultValue "method_" x.name) x.tag args
             | JPClosure(a,b) -> sprintf "ClosureMethod%i" (closure (a,b)).tag
         match a with
+        | TySizeOf t -> return' $"sizeof({tup_ty t})"
         | TyMacro _ -> raise_codegen_error "Macros are supposed to be taken care of in the `binds` function."
         | TyIf(cond,tr,fl) ->
             line s (sprintf "if (%s){" (tup_data cond))
@@ -312,6 +314,11 @@ let codegen' (env : PartEvalResult) (x : TypedBind []) =
             binds (indent s) ret fl
             line s "}"
         | TyJoinPoint(a,args) -> return' (jp (a, args))
+        | TyBackendSwitch m ->
+            let backend = "Cuda"
+            match Map.tryFind backend m with
+            | Some b -> binds s ret b
+            | None -> raise_codegen_error $"Cannot find the backend \"{backend}\" in the TyBackendSwitch."
         | TyBackend(_,_,(r,_)) -> raise_codegen_error_backend r "The C backend does not support nesting of other backends."
         | TyWhile(a,b) ->
             let cond =
@@ -431,6 +438,7 @@ let codegen' (env : PartEvalResult) (x : TypedBind []) =
             | BitwiseAnd, [a;b] -> sprintf "%s & %s" (tup_data a) (tup_data b)
             | BitwiseOr, [a;b] -> sprintf "%s | %s" (tup_data a) (tup_data b)
             | BitwiseXor, [a;b] -> sprintf "%s ^ %s" (tup_data a) (tup_data b)
+            | BitwiseComplement, [a] -> sprintf "~%s" (tup_data a)
 
             | ShiftLeft, [a;b] -> sprintf "%s << %s" (tup_data a) (tup_data b)
             | ShiftRight, [a;b] -> sprintf "%s >> %s" (tup_data a) (tup_data b)

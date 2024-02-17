@@ -2,6 +2,7 @@
 
 open Spiral
 open Spiral.Tokenize
+open Spiral.Startup
 open Spiral.BlockParsing
 open Spiral.PartEval.Main
 open Spiral.CodegenUtils
@@ -154,7 +155,7 @@ let codegen'' backend_handler (env : PartEvalResult) (x : TypedBind []) =
             r
 
     let cupy_ty x = env.ty_to_data x |> data_free_vars |> cupy_ty
-    let rec binds_start (args : TyV []) (s : CodegenEnv) (x : TypedBind []) = binds (Codegen.C.refc_prepass Set.empty (Set args) x).g_decr s BindsTailEnd x
+    let rec binds_start (args : TyV []) (s : CodegenEnv) (x : TypedBind []) = binds (Codegen.C.refc_prepass "Python" Set.empty (Set args) x).g_decr s BindsTailEnd x
     and binds g_decr (s : CodegenEnv) (ret : BindsReturn) (stmts : TypedBind []) = 
         let s_len = s.text.Length
         let tup_destruct (a,b) =
@@ -223,8 +224,9 @@ let codegen'' backend_handler (env : PartEvalResult) (x : TypedBind []) =
             x' |> Array.map (fun (L(i',_)) -> $"v{i}.v{i'}")
             |> String.concat ", "
             |> return'
-        let length (a,b) = return' $"len({tup_data b})"
+
         match a with
+        | TySizeOf _ -> raise_codegen_error "`sizeof` is not supported in the Python back end."
         | TyMacro a -> a |> List.map (function CMText x -> x | CMTerm x -> tup_data x | CMType x -> tup_ty x | CMTypeLit a -> type_lit a) |> String.concat "" |> return'
         | TyIf(cond,tr,fl) ->
             line s (sprintf "if %s:" (tup_data cond))
@@ -270,6 +272,11 @@ let codegen'' backend_handler (env : PartEvalResult) (x : TypedBind []) =
                 line s "case _:"
                 binds g_decr (indent s) ret b
                 )
+        | TyBackendSwitch m ->
+            let backend = "Python"
+            match Map.tryFind backend m with
+            | Some b -> binds g_decr s ret b
+            | None -> raise_codegen_error $"Cannot find the backend \"{backend}\" in the TyBackendSwitch."
         | TyUnionBox(a,b,c') ->
             let c = c'.Item
             let i = c.tags.[a]
@@ -290,7 +297,8 @@ let codegen'' backend_handler (env : PartEvalResult) (x : TypedBind []) =
         | TyFailwith(a,b) -> line s $"raise Exception({tup_data' b})"
         | TyConv(a,b) -> return' $"{tyv a}({tup_data b})"
         | TyApply(L(i,_),b) -> return' $"v{i}({tup_data' b})"
-        | TyArrayLength(a,b) | TyStringLength(a,b) -> length (a,b)
+        | TyArrayLength(a,b) -> return' $"{tup_data b}.size"
+        | TyStringLength(a,b) -> return' $"len({tup_data b})"
         | TyOp(Global,[DLit (LitString x)]) -> global' x
         | TyOp(op,l) ->
             match op, l with
@@ -304,7 +312,7 @@ let codegen'' backend_handler (env : PartEvalResult) (x : TypedBind []) =
             | TypeToVar, _ -> raise_codegen_error "The use of `` should never appear in generated code."
             | StringIndex, [a;b] -> sprintf "%s[%s]" (tup_data a) (tup_data b)
             | StringSlice, [a;b;c] -> sprintf "%s[%s:%s]" (tup_data a) (tup_data b) (tup_data c)
-            | ArrayIndex, [a;b] -> sprintf "%s[%s]" (tup_data a) (tup_data b)
+            | ArrayIndex, [a;b] -> sprintf "%s[%s].item()" (tup_data a) (tup_data b)
             | ArrayIndexSet, [a;b;c] -> 
                 match tup_data' c with
                 | "" -> "pass # void array set"
@@ -328,6 +336,7 @@ let codegen'' backend_handler (env : PartEvalResult) (x : TypedBind []) =
             | BitwiseAnd, [a;b] -> sprintf "%s & %s" (tup_data a) (tup_data b)
             | BitwiseOr, [a;b] -> sprintf "%s | %s" (tup_data a) (tup_data b)
             | BitwiseXor, [a;b] -> sprintf "%s ^ %s" (tup_data a) (tup_data b)
+            | BitwiseComplement, [a] -> sprintf "~%s" (tup_data a)
 
             | ShiftLeft, [a;b] -> sprintf "%s << %s" (tup_data a) (tup_data b)
             | ShiftRight, [a;b] -> sprintf "%s >> %s" (tup_data a) (tup_data b)

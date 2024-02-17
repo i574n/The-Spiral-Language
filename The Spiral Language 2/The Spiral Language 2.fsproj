@@ -38,6 +38,7 @@
     <Compile Include="PersistentVectorExtensions.fs" />
     <Compile Include="HopacExtensions.fs" />
     <Compile Include="HashConsing.fs" />
+    <Compile Include="Startup.fs" />
     <Compile Include="Utils.fs" />
     <Compile Include="ParserCombinators.fs" />
     <Compile Include="LineParsers.fs" />
@@ -64,13 +65,14 @@
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="Argu" Version="6.1.5" />
     <PackageReference Include="FParsec" Version="2.0.0-beta2" />
     <PackageReference Include="FSharp.Json" Version="0.4.1" />
     <PackageReference Include="FSharpx.Collections" Version="3.1.0" />
     <PackageReference Include="Hopac" Version="0.5.1" />
+
     <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" Version="8.0.2" />
 
-    <PackageReference Include="Argu" Version="6.1.1" />
     <PackageReference Include="FSharp.Control.AsyncSeq" Version="3.2.1" />
     <PackageReference Include="System.CommandLine" Version="2.0.0-beta4.22272.1" />
     <PackageReference Include="System.Reactive.Linq" Version="6.0.0" />

@@ -3,6 +3,7 @@
 open Spiral
 open Spiral.Utils
 open Spiral.Tokenize
+open Spiral.Startup
 open Spiral.BlockParsing
 open Spiral.PartEval.Main
 open Spiral.CodegenUtils
@@ -49,7 +50,7 @@ let varc_data call_data =
     v
 let varc_set x i = Set.fold (fun s v -> Map.add v i s) Map.empty x
 
-let refc_used_vars (x : TypedBind []) =
+let refc_used_vars backend (x : TypedBind []) =
     let g_bind : Dictionary<TypedBind, TyV Set> = Dictionary(HashIdentity.Reference)
     let fv x = x |> data_free_vars |> Set
     let jp (x : JoinPointCall) = snd x |> Set
@@ -63,6 +64,7 @@ let refc_used_vars (x : TypedBind []) =
             ) x Set.empty
     and op (x : TypedOp) : TyV Set =
         match x with
+        | TySizeOf _ -> Set.empty
         | TyMacro l -> List.fold (fun s -> function CMTerm d -> s + fv d | _ -> s) Set.empty l
         | TyArrayLiteral(_,l) | TyOp(_,l) -> List.fold (fun s x -> s + fv x) Set.empty l
         | TyLayoutToHeap(x,_) | TyLayoutToHeapMutable(x,_)
@@ -71,6 +73,7 @@ let refc_used_vars (x : TypedBind []) =
         | TyLayoutIndexAll(i) | TyLayoutIndexByKey(i,_) -> Set.singleton i
         | TyApply(i,d) | TyLayoutHeapMutableSet(i,_,d) -> Set.singleton i + fv d
         | TyJoinPoint x -> jp x
+        | TyBackendSwitch m -> Map.tryFind backend m |> Option.map binds |> Option.defaultValue Set.empty
         | TyBackend(_,_,_) -> Set.empty
         | TyIf(cond,tr',fl') -> fv cond + binds tr' + binds fl'
         | TyUnionUnbox(vs,_,on_succs',on_fail') ->
@@ -92,8 +95,8 @@ let refc_used_vars (x : TypedBind []) =
 
 type RefcVars = {g_incr : Dictionary<TypedBind,TyV Set>; g_decr : Dictionary<TypedBind,TyV Set>; g_op : Dictionary<TypedBind,Map<TyV, int>>; g_op_decr : Dictionary<TypedBind,TyV Set>}
 
-let refc_prepass (new_vars : TyV Set) (increfed_vars : TyV Set) (x : TypedBind []) =
-    let used_vars = refc_used_vars x
+let refc_prepass backend (new_vars : TyV Set) (increfed_vars : TyV Set) (x : TypedBind []) =
+    let used_vars = refc_used_vars backend x
     let g_incr : Dictionary<TypedBind, TyV Set> = Dictionary(HashIdentity.Reference)
     let g_decr : Dictionary<TypedBind, TyV Set> = Dictionary(HashIdentity.Reference)
     let g_op : Dictionary<TypedBind, _> = Dictionary(HashIdentity.Reference)
@@ -134,9 +137,10 @@ let refc_prepass (new_vars : TyV Set) (increfed_vars : TyV Set) (x : TypedBind [
         | TyJoinPoint(_,x) -> Array.fold (fun s x -> varc_add x 1 s) Map.empty x |> fun_call
         | TyArrayLiteral(_,x) -> List.fold (fun s x -> varc_union s (varc_data x)) Map.empty x |> fun_call
         | TyUnionBox(_,x,_) | TyLayoutToHeapMutable(x,_) | TyLayoutToHeap(x,_) -> varc_data x |> fun_call
-        | TyLayoutIndexAll _ | TyLayoutIndexByKey _ | TyMacro _ | TyOp _ | TyFailwith _ | TyConv _ 
+        | TySizeOf _ | TyLayoutIndexAll _ | TyLayoutIndexByKey _ | TyMacro _ | TyOp _ | TyFailwith _ | TyConv _ 
         | TyArrayCreate _ | TyArrayLength _ | TyStringLength _ | TyLayoutHeapMutableSet _ | TyBackend _ -> ()
         | TyWhile(_,body) -> binds Set.empty Set.empty body
+        | TyBackendSwitch m -> Map.tryFind backend m |> Option.iter (binds Set.empty increfed_vars)
         | TyIf(_,tr',fl') -> binds Set.empty increfed_vars tr'; binds Set.empty increfed_vars fl'
         | TyUnionUnbox(_,_,on_succs',on_fail') ->
             Map.iter (fun _ (lets,body) -> 
@@ -297,7 +301,7 @@ let codegen' (backend_type : CBackendType) (env : PartEvalResult) (x : TypedBind
 
     let tyvs_to_tys (x : TyV []) = Array.map (fun (L(i,t)) -> t) x
 
-    let rec binds_start (args : TyV []) (s : CodegenEnv) (x : TypedBind []) = binds (refc_prepass Set.empty (Set args) x) s BindsTailEnd x
+    let rec binds_start (args : TyV []) (s : CodegenEnv) (x : TypedBind []) = binds (refc_prepass "C" Set.empty (Set args) x) s BindsTailEnd x
     and return_local s ret (x : string) = 
         match ret with
         | [||] -> line s $"{x};"
@@ -475,6 +479,7 @@ let codegen' (backend_type : CBackendType) (env : PartEvalResult) (x : TypedBind
             | JPClosure(a,b) -> sprintf "ClosureCreate%i(%s)" (closure (a,b)).tag args
         let string_in_op = function DLit (LitString b) -> lit_string b | b -> $"{tup_data b}->ptr"
         match a with
+        | TySizeOf t -> return' $"sizeof({tup_ty t})"
         | TyMacro _ -> raise_codegen_error "Macros are supposed to be taken care of in the `binds` function."
         | TyIf(cond,tr,fl) ->
             line s (sprintf "if (%s){" (tup_data cond))
@@ -483,6 +488,11 @@ let codegen' (backend_type : CBackendType) (env : PartEvalResult) (x : TypedBind
             binds (indent s) ret fl
             line s "}"
         | TyJoinPoint(a,args) -> return' (jp (a, args))
+        | TyBackendSwitch m ->
+            let backend = "C"
+            match Map.tryFind backend m with
+            | Some b -> binds s ret b
+            | None -> raise_codegen_error $"Cannot find the backend \"{backend}\" in the TyBackendSwitch."
         | TyBackend(_,_,(r,_)) -> raise_codegen_error_backend r "The C backend does not support nesting of other backends."
         | TyWhile(a,b) ->
             let cond =
@@ -616,6 +626,7 @@ let codegen' (backend_type : CBackendType) (env : PartEvalResult) (x : TypedBind
             | BitwiseAnd, [a;b] -> sprintf "%s & %s" (tup_data a) (tup_data b)
             | BitwiseOr, [a;b] -> sprintf "%s | %s" (tup_data a) (tup_data b)
             | BitwiseXor, [a;b] -> sprintf "%s ^ %s" (tup_data a) (tup_data b)
+            | BitwiseComplement, [a] -> sprintf "~%s" (tup_data a)
 
             | ShiftLeft, [a;b] -> sprintf "%s << %s" (tup_data a) (tup_data b)
             | ShiftRight, [a;b] -> sprintf "%s >> %s" (tup_data a) (tup_data b)

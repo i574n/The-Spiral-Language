@@ -1,0 +1,210 @@
+open corebase
+open corecuda
+open tensorm
+
+
+inl constant() = 
+    // Set this to true to verify the correctness of the GPU-computed matrix.
+    inl cpu_debug = false
+    // Set this to fales to use more than 64 Kb of shared memory to cache data, to
+    // improve the performance of the computations on GPU.
+    // Note that you need a GPU that can have more than 64 Kb of shared memory
+    // per multiprocessor.
+    inl shared_memory_limit_64k = false
+
+    // MMA matrix tile dimensions.
+    inl m' = 16 : int
+    inl n' = 16 : int
+    inl k' = 8 : int
+
+    // GEMM configuration.
+    inl m_tiles = 512 : int
+    inl n_tiles = 512 : int
+    inl k_tiles = 512 : int
+
+    inl m_global = m' * m_tiles
+    inl n_global = n' * n_tiles
+    inl k_global = k' * k_tiles
+
+    inl c_layout = "wmma::mem_col_major"
+    
+    // Implementation constants.
+    inl warp_size = 32 : int
+    inl warps_per_block = 8 : int
+    inl threads_per_block = warp_size * warps_per_block
+    // With only 64 Kb shared memory available, we can fit two 8-tile chunks of
+    // the A and B matrix data, that is (M = 16) * (K = 8) * 8 * (CHUNK_K = 8)
+    // * sizeof(float) = 32 Kb each.
+    // (i.e. two 8x8 arrays of tiles of 16x8 float-typed elements per CTA).
+    // But we cannot account the 8 Kb total skew overhead, without which the performance
+    // would be severely impacted. So we choose to reduce the chunk size in half,
+    // i.e. the amount of A and B matrix data we cache in shared memory.
+    // Accordingly, this doubles the number of outer iterations across the global K
+    // dimension, which only slightly impacts the performance.    
+    inl chunk_k : int = if shared_memory_limit_64k then 4 else 8
+    inl sizeof_float = 4
+    inl sizeof_int4 = 16
+    inl chunk_line_bytes = chunk_k * k' * sizeof_float
+    inl warp_copy_bytes = warp_size * sizeof_int4
+    inl chunk_copy_lines_per_warp = warp_copy_bytes / chunk_line_bytes
+    inl chunk_copy_line_lanes = warp_size / chunk_copy_lines_per_warp
+    inl block_row_warps = 2 : int
+    inl block_col_warps = 4 : int
+
+    inl warp_row_tiles = 4 : int
+    inl warp_col_tiles = 2 : int
+
+    inl block_row_tiles = warp_row_tiles * block_row_warps
+    inl block_col_tiles = warp_col_tiles * block_col_warps
+
+    inl global_mem_stride = n_global
+
+    inl shmem_stride = n' * block_row_tiles
+    inl shmem_offset = n' * warp_row_tiles
+
+    // The macro below is used to shift rows of the A matrix and columns of the B matrix
+    // in shared memory to minimize possible bank conflicts.
+    // Before performing the nvcuda::wmma::mma_sync operation, the warp must load the matrix
+    // data using the nvcuda::wmma::load_matrix_sync operation. Although the memory access pattern
+    // is not specified for that function, each lane in the warp can read one or multiple matrix
+    // elements from different matrix rows or columns.
+    // For shared memory, such access can result in bank conflicts if different rows / columns
+    // of the matrix map to the same bank. By shifting each row and column by a few bytes, we
+    // make sure that they map to different banks, thus reducing the number of possible bank
+    // conflicts.
+    // The number of 8 four-byte "float" elements is chosen as the minimum possible shift because
+    // we must keep each row and column 256-bit aligned, as required by nvcuda::wmma::load_matrix_sync.
+    inl skew_float = 8 : int
+    {
+    cpu_debug
+    shared_memory_limit_64k
+    m' n' k'
+    m_tiles n_tiles k_tiles
+    m_global n_global k_global
+    c_layout
+    warp_size warps_per_block threads_per_block
+    chunk_k chunk_line_bytes
+    warp_copy_bytes chunk_copy_lines_per_warp chunk_copy_line_lanes 
+    block_row_warps block_col_warps
+    warp_row_tiles warp_col_tiles
+    block_row_tiles block_col_tiles
+    global_mem_stride
+    shmem_stride
+    shmem_offset
+    skew_float
+    }
+
+nominal gemm_config m_frag n_frag k_frag frag_in = {m_frag : int; n_frag : int; k_frag : int}
+inl gemm_config forall m_frag n_frag k_frag frag_in. : gemm_config m_frag n_frag k_frag frag_in = gemm_config {
+    m_frag = real real_core.type_lit_to_lit `m_frag
+    n_frag = real real_core.type_lit_to_lit `n_frag
+    k_frag = real real_core.type_lit_to_lit `k_frag
+    }
+
+inl simple_wmma_gemm forall m_frag n_frag k_frag frag_in float{number}. (gemm_config {m_frag n_frag k_frag} : gemm_config m_frag n_frag k_frag frag_in) 
+        alpha (a,ta : tensor (int * int) float * bool) (b,tb : tensor (int * int) float * bool) 
+        beta (c : tensor (int * int) float) =
+    inl _ =
+        inl swap (a,b) x = if x then b,a else a,b
+        inl a_dim = swap a.dim ta
+        inl b_dim = swap b.dim tb
+        inl c_dim = c.dim
+        assert (snd a_dim = fst b_dim) "The K dimension of the A and B tensors must match."
+        assert (fst a_dim = fst c_dim) "The M dimension of the A and C tensors must match."
+        assert (snd b_dim = snd c_dim) "The N dimension of the B and C tensors must match."
+
+    inl {threads_per_block} = constant()
+
+    inl a = 
+        if ta then // col_major
+            reshape (fun k,m => {k=k / k_frag}, {k_frag}, {m=m / m_frag}, {m_frag}) a
+            |> reorder (fun k,{k_frag},m,{m_frag} => m,k,(k_frag,m_frag))
+        else // row_major
+            reshape (fun m,k => {m=m / m_frag}, {m_frag}, {k=k / k_frag}, {k_frag}) a
+            |> reorder (fun m,{m_frag},k,{k_frag} => m,k,(m_frag,k_frag))
+    inl b =
+        if tb then // col_major
+            reshape (fun n,k => {n=n / n_frag}, {n_frag}, {k=k / k_frag}, {k_frag}) b
+            |> reorder (fun n,{n_frag},k,{k_frag} => n,k,(n_frag,k_frag))
+        else // row_major
+            reshape (fun k,n => {k=k / k_frag}, {k_frag}, {n=n / n_frag}, {n_frag}) b
+            |> reorder (fun k,{k_frag},n,{n_frag} => n,k,(k_frag,n_frag))
+    inl c = // row_major
+        reshape (fun m,n => {m=m / m_frag}, {m_frag}, {n=n / n_frag}, {n_frag}) c
+        |> reorder (fun m,{m_frag},n,{n_frag} => (m,n),(m_frag,n_frag))
+    
+    // threads per block
+    inl blocks = threads_per_block
+    // blocks per grid (number of SMs in a RTX 4060)
+    inl grids = 24
+    run grids blocks (fun () =>
+        global "#include <mma.h>"
+        global "using namespace nvcuda;"
+        global "#include <cooperative_groups.h>"
+        global "using namespace cooperative_groups;"
+
+        open cooperative_groups
+        
+        loop_warps_in_grid' (fst a.dim, fst b.dim) (fun m,n =>
+            inl a = apply m a
+            inl b = apply n b
+            inl c = apply (m,n) c
+
+            open wmma
+
+            inl acc : fragment' accumulator m_frag n_frag k_frag float = create_fragment' false 
+            fill_fragment' acc 0
+            loop_linear' (fst a.dim) (fun k =>
+                inl a = apply k a
+                inl b = apply k b
+
+                inl a_frag : fragment' matrix_a m_frag n_frag k_frag frag_in = create_fragment' ta
+                inl b_frag : fragment' matrix_b m_frag n_frag k_frag frag_in = create_fragment' tb
+
+                load_matrix_sync' a_frag a
+                load_matrix_sync' b_frag b
+
+                mma_sync' acc a_frag b_frag acc
+                )
+
+            inl c_frag : fragment' accumulator m_frag n_frag k_frag float = create_fragment' false
+            load_matrix_sync' c_frag c
+            loop.linear' (length c_frag) (fun i =>
+                set c_frag i (alpha * index acc i + beta * index c_frag i)
+                )
+            store_matrix_sync' c c_frag
+            )
+        )
+
+
+inl main() =
+    inl grid_range () : int = $"gridDim.x * blockDim.x"
+    inl linear_id () : int = $"threadIdx.x + blockIdx.x * blockDim.x"
+
+    inl get_body forall dim el. (x : tensor dim el) : array el = 
+        real tensorm.utils.map (fun (tensor_body {array}) => array) x.bodies : array el
+
+    inl random_normal dim =
+        inl len : int = real open real_core in tensorm.utils.foldBack (*) dim 1
+        inl t : array f32 = $"cp.random.normal(0,1,!len,cp.float32)" 
+        fromArray t |> reshape (const dim)
+
+    inl swap (a,b) x = if x then b,a else a,b
+    inl cp_matmul (a : tensor (int * int) float * bool) (b : tensor (int * int) float * bool) (c : tensor (int * int) float) : tensor (int * int) float =
+        inl transpose ta (x : array float) : array float = if ta then $"cp.transpose(!x)" else x
+        inl f (ta : bool) (a_body : array float) (a_dim : int * int) : array float = 
+            inl x : array float = $"!a_body.reshape(!a_dim)"
+            transpose ta x
+        inl g (a,ta : tensor (int * int) float * bool) = f ta (get_body a) a.dim
+        inl a_body,b_body,c_body : array float * array float * array float = g a, g b, f false (get_body c) c.dim
+        
+        $"(cp.matmul(!a_body,!b_body)+!c_body).flatten()"
+        |> fromArray |> reshape (const c.dim)
+
+    inl m,n,k : int * int * int = 256, 256, 128
+    inl ta,tb = true,false
+    inl [a; b; c] = listm.map random_normal ([swap (m, k) ta; swap (k, n) tb; m, n])
+    inl d = cp_matmul (a,ta) (b,tb) c
+    simple_wmma_gemm (gemm_config : gemm_config 16 16 8 wmma.tf32) 1 (a, ta) (b, tb) 1 c
+    inl d,c = get_body d, get_body c
+    $"cp.max(cp.abs(!c-!d))" : f32

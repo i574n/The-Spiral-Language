@@ -1,6 +1,6 @@
 import * as path from "path"
 import { window, ExtensionContext, languages, workspace, DiagnosticCollection, TextDocument, Diagnostic, DiagnosticSeverity, Position, Range, TextDocumentContentChangeEvent, SemanticTokens, SemanticTokensLegend, DocumentSemanticTokensProvider, EventEmitter, SemanticTokensBuilder, DocumentRangeSemanticTokensProvider, SemanticTokensEdits, TextDocumentChangeEvent, SemanticTokensEdit, Uri, CancellationToken, CancellationTokenSource, Disposable, HoverProvider, Hover, MarkdownString, commands, DocumentLinkProvider, DocumentLink, CodeAction, CodeActionProvider, WorkspaceEdit, FileDeleteEvent, ProcessExecution, FileRenameEvent, FileWillDeleteEvent, FileWillRenameEvent } from "vscode"
-import {HubConnectionBuilder, LogLevel} from "@microsoft/signalr"
+import {HubConnectionBuilder, HubConnectionState, LogLevel} from "@microsoft/signalr"
 
 class SerialDisposable implements Disposable {
     f : () => any
@@ -21,9 +21,13 @@ class SerialDisposable implements Disposable {
 }
 
 const port : number = workspace.getConfiguration("spiral").get("port") || 13805
+const hubTimeout = 1000
 const hub = new HubConnectionBuilder()
     .withUrl(`http://localhost:${port}`)
     .configureLogging(LogLevel.Error)
+    .withAutomaticReconnect({
+        nextRetryDelayInMilliseconds: x => hubTimeout
+    })
     .build()
 
 function sleep(ms : number) {
@@ -36,9 +40,10 @@ async function hubStart() {
             await hub.start();
             return
         } catch (err : any) {
-            await sleep(500)
+            await sleep(hubTimeout)
         }
     }
+    throw Error("Max connection attempts elapsed. Spiral VS Code Client has failed to connect to the Spiral server.")
 }
 
 const requestRun = async (prev : Promise<string | null>, file: any): Promise<string | null> => {
@@ -252,22 +257,25 @@ export const activate = async (ctx: ExtensionContext) => {
         serverDisposables.assign(() => {
             prev_request = new Promise(resolve => resolve(null))
             terminal.dispose()
-            hub.stop()
             errorsProject.clear(); errorsTokenization.clear(); errorsParse.clear(); errorsType.clear()
         })
-
 
         const terminal = window.createTerminal({name: "Spiral Server*", hideFromUser})
         const compiler_path = path.join(__dirname,"../compiler/Spiral.dll")
         if (isRestart) { await sleep(1000) }
-        terminal.sendText(`dotnet "${compiler_path}" port=${port}`)
-        await hubStart()
-
-        hub.on("ServerToClientMsg",serverToClientMsgHandler)
-        workspace.textDocuments.forEach(onDocOpen)
+        const config  = workspace.getConfiguration("spiral")
+        const default_int : string = config.get("default_int") || "i32"
+        const default_float : string = config.get("default_float") || "f64"
+        terminal.sendText(`dotnet "${compiler_path}" --port ${port} --default-int ${default_int} --default-float ${default_float}`)
     }
-
+    
     await startServer(workspace.getConfiguration("spiral").get("hideTerminal") || false, false)
+    await hubStart()
+    hub.on("ServerToClientMsg",serverToClientMsgHandler)
+    hub.onreconnected(() => {
+        workspace.textDocuments.forEach(onDocOpen)
+    })
+    workspace.textDocuments.forEach(onDocOpen)
 
     const spiralFilePattern = {pattern: '**/*.{spi,spir}'}
     const spiralProjFilePattern = {pattern: '**/package.spiproj'}
@@ -287,14 +295,14 @@ export const activate = async (ctx: ExtensionContext) => {
                     case ".spi": case ".spir": {
                         const config = workspace.getConfiguration("spiral")
                         const backend : string = config.get("backend") || "Fsharp"
-                        const backend2 = backend === "Cython" && config.get("generateExceptStar") ? "Cython*" : backend
-                        spiBuildFileReq(x.document.uri.toString(true), backend2)
+                        spiBuildFileReq(x.document.uri.toString(true), backend)
                     }
                 }})
         }),
         commands.registerCommand("runClosure", x => x() ),
         commands.registerCommand("startServer", () => startServer(false, true) ),
         commands.registerCommand("startServerHidden", () => startServer(true, true) ),
+        commands.registerCommand("showConnectionStatus", () => window.showInformationMessage(JSON.stringify(hub.connectionId)) ),
         languages.registerDocumentLinkProvider(spiralProjFilePattern,new SpiralProjectLinks()),
         languages.registerCodeActionsProvider(spiralProjFilePattern,new SpiralProjectCodeActions())
     )

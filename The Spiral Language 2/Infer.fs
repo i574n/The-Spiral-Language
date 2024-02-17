@@ -1,6 +1,7 @@
 ﻿module Spiral.Infer
 
 open VSCTypes
+open Spiral.Startup
 open Spiral.BlockParsing
 
 type [<ReferenceEquality>] 'a ref' = {mutable contents' : 'a}
@@ -77,6 +78,7 @@ type TypeError =
     | ExpectedRecordInsideALayout of T
     | UnionsCannotBeApplied
     | ExpectedNominalInApply of T
+    | MalformedNominal
     | ExpectedRecordAsResultOfIndex of T
     | RecordIndexFailed of string
     | ModuleIndexFailed of string
@@ -504,6 +506,7 @@ let show_type_error (env : TopEnv) x =
     match x with
     | UnionsCannotBeApplied -> "Unions cannot be applied."
     | ExpectedNominalInApply a -> sprintf "Expected a nominal.\nGot: %s" (f a)
+    | MalformedNominal -> "Malformed nominal."
     | ModuleMustBeImmediatelyApplied -> "Module must be immediately applied."
     | ExpectedSymbol' a -> sprintf "Expected a symbol.\nGot: %s" (f a)
     | KindError(a,b) -> sprintf "Kind unification failure.\nGot:      %s\nExpected: %s" (show_kind a) (show_kind b)
@@ -994,7 +997,10 @@ let infer package_id module_id (top_env' : TopEnv) expr =
                         let n = top_env.nominals.[i]
                         match n.body with
                         | TyUnion _ -> errors.Add(r,UnionsCannotBeApplied)
-                        | _ -> loop (subst (List.zip n.vars l) n.body)
+                        | _ -> 
+                            match Utils.list_try_zip n.vars l with
+                            | Some l -> loop (subst l n.body)
+                            | None -> errors.Add(r,MalformedNominal)
                     | _ -> errors.Add(r,ExpectedNominalInApply a)
                 | TyLayout(a,_) ->
                     match visit_t a with
@@ -1645,7 +1651,7 @@ let infer package_id module_id (top_env' : TopEnv) expr =
         errors = errors |> Seq.toList |> List.map (fun (a,b) -> a, show_type_error top_env b)
         }
 
-let base_types =
+let base_types (default_env : Startup.DefaultEnv) =
     let inline inl f = let v = {scope=0; kind=KindType; constraints=Set.empty; name="x"} in TyInl(v,f v)
     [
     "i8", TyPrim Int8T
@@ -1664,12 +1670,14 @@ let base_types =
     "array_base", inl (fun x -> TyArray(TyVar x))
     "heap", inl (fun x -> TyLayout(TyVar x,Layout.Heap))
     "mut", inl (fun x -> TyLayout(TyVar x,Layout.HeapMutable))
+    "int", TyPrim default_env.default_int
+    "float", TyPrim default_env.default_float
     ]
 
-let top_env_default : TopEnv = 
+let top_env_default default_env : TopEnv = 
     // Note: `top_env_default` should have no nominals, prototypes or terms.
     {top_env_empty with 
-        ty = Map.ofList base_types
+        ty = Map.ofList (base_types default_env)
         constraints =
             [
             "uint", CUInt

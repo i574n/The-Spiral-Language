@@ -3,6 +3,7 @@
 open Spiral
 open Spiral.Utils
 open Spiral.Tokenize
+open Spiral.Startup
 open Spiral.BlockParsing
 open Spiral.PartEval.Main
 open Spiral.CodegenUtils
@@ -179,10 +180,8 @@ let codegen (globals : _ ResizeArray, fwd_dcls : _ ResizeArray, types : _ Resize
                         let inits = List.map tup_data b' |> String.concat "," |> sprintf "{%s}"
                         match d with
                         | [|L(i,YArray t)|] -> // For the regular arrays.
-                            line s $"%s{tyv t} v{i}[] = %s{inits};"
+                            line s $"%s{tup_ty t} v{i}[] = %s{inits};"
                             true
-                        //| [|L(i,t)|] -> // TODO: For overloaded arrays. Structs with a single field that are arrays can be initialized like this in C++.
-                        //    line s $"%s{tyv t} v{i} = %s{inits};"
                         | _ ->
                             raise_codegen_error "Compiler error: Expected a single variable on the left side of an array literal op."
                     | TyArrayCreate(a,b) ->  
@@ -192,9 +191,8 @@ let codegen (globals : _ ResizeArray, fwd_dcls : _ ResizeArray, types : _ Resize
                                 match b with
                                 | DLit x -> lit x
                                 | _ -> raise_codegen_error "Array sizes need to be statically known in the Cuda C++ backend."
-                            line s $"%s{tyv t} v{i}[{size}];"
+                            line s $"%s{tup_ty t} v{i}[{size}];"
                             true
-                        //| [|L(i,t)|] -> line s $"%s{tyv t} v{i};" // TODO: Put in overloaded arrays later.
                         | _ -> raise_codegen_error "Compiler error: Expected a single variable on the left side of an array create op."
                     | _ ->
                         decl_vars |> line' s
@@ -238,14 +236,14 @@ let codegen (globals : _ ResizeArray, fwd_dcls : _ ResizeArray, types : _ Resize
         | YFun(a,b) -> sprintf "Fun%i" (cfun (a,b)).tag
         | a -> raise_codegen_error (sprintf "Compiler error: Type not supported in the codegen.\nGot: %A" a)
     and prim = function
-        | Int8T -> "int8_t" 
-        | Int16T -> "int16_t"
-        | Int32T -> "int32_t"
-        | Int64T -> "int64_t"
-        | UInt8T -> "uint8_t"
-        | UInt16T -> "uint16_t"
-        | UInt32T -> "uint32_t"
-        | UInt64T -> "uint64_t" // are defined in cstdint
+        | Int8T -> "char" 
+        | Int16T -> "short"
+        | Int32T -> "long"
+        | Int64T -> "long long"
+        | UInt8T -> "unsigned"
+        | UInt16T -> "unsigned short"
+        | UInt32T -> "unsigned long"
+        | UInt64T -> "unsigned long long"
         | Float32T -> "float"
         | Float64T -> "double"
         | BoolT -> "bool" // part of c++ standard
@@ -308,6 +306,11 @@ let codegen (globals : _ ResizeArray, fwd_dcls : _ ResizeArray, types : _ Resize
             line s "}"
         | TyJoinPoint(a,args) -> return' (jp (a, args))
         | TyBackend(_,_,(r,_)) -> raise_codegen_error_backend r "The C backend does not support nesting of other backends."
+        | TyBackendSwitch m ->
+            let backend = "Cuda"
+            match Map.tryFind backend m with
+            | Some b -> binds s ret b
+            | None -> raise_codegen_error $"Cannot find the backend \"{backend}\" in the TyBackendSwitch."
         | TyWhile(a,b) ->
             let cond =
                 match a with
@@ -391,6 +394,7 @@ let codegen (globals : _ ResizeArray, fwd_dcls : _ ResizeArray, types : _ Resize
             $"v{i}({args})" |> return'
         | TyArrayLength(_,b) -> raise_codegen_error "Array length is not supported in the Cuda C++ backend as they are bare pointers."
         | TyStringLength(_,b) -> raise_codegen_error "String length is not supported in the Cuda C++ backend."
+        | TySizeOf t -> return' $"sizeof({tup_ty t})"
         | TyOp(Global,[DLit (LitString x)]) -> global' x
         | TyOp(op,l) ->
             match op, l with
@@ -426,6 +430,7 @@ let codegen (globals : _ ResizeArray, fwd_dcls : _ ResizeArray, types : _ Resize
             | BitwiseAnd, [a;b] -> sprintf "%s & %s" (tup_data a) (tup_data b)
             | BitwiseOr, [a;b] -> sprintf "%s | %s" (tup_data a) (tup_data b)
             | BitwiseXor, [a;b] -> sprintf "%s ^ %s" (tup_data a) (tup_data b)
+            | BitwiseComplement, [a] -> sprintf "~%s" (tup_data a)
 
             | ShiftLeft, [a;b] -> sprintf "%s << %s" (tup_data a) (tup_data b)
             | ShiftRight, [a;b] -> sprintf "%s >> %s" (tup_data a) (tup_data b)
@@ -456,7 +461,7 @@ let codegen (globals : _ ResizeArray, fwd_dcls : _ ResizeArray, types : _ Resize
             let ret_ty = tup_ty x.range
             let fun_name = Option.defaultValue (if is_while then "while_method_" else "method_") x.name
             let args = x.free_vars |> Array.mapi (fun i (L(_,x)) -> $"{tyv x} v{i}") |> String.concat ", "
-            let inline_ = if is_while then "inline " else line s_fwd $"{ret_ty} {fun_name}{x.tag}({args});"; ""
+            let inline_ = if is_while then "inline " else line s_fwd $"__device__ {ret_ty} {fun_name}{x.tag}({args});"; ""
             line s_fun $"__device__ {inline_}{ret_ty} {fun_name}{x.tag}({args}){{"
             binds_start (indent s_fun) x.body
             line s_fun "}"
@@ -511,8 +516,8 @@ let codegen (globals : _ ResizeArray, fwd_dcls : _ ResizeArray, types : _ Resize
             let concat x = String.concat ", " x
             let args = x.tys |> Array.mapi (fun i x -> $"{tyv x} t{i}")
             let con_init = x.tys |> Array.mapi (fun i x -> $"v{i}(t{i})")
-            line (indent s_typ) $"{name}({concat args}) : {concat con_init} {{}}" 
-            line (indent s_typ) $"{name}() = default;" 
+            line (indent s_typ) $"__device__ {name}({concat args}) : {concat con_init} {{}}" 
+            line (indent s_typ) $"__device__ {name}() = default;" 
 
             line s_typ "};"
 
@@ -544,7 +549,7 @@ let codegen (globals : _ ResizeArray, fwd_dcls : _ ResizeArray, types : _ Resize
 
             map_iteri (fun tag k v -> 
                 let args = v |> Array.map (fun (L(i,t)) -> $"{tyv t} v{i}") |> String.concat ", "
-                line s_fun (sprintf "US%i US%i_%i(%s) { // %s" i i tag args k)
+                line s_fun (sprintf "__device__ US%i US%i_%i(%s) { // %s" i i tag args k)
                 let _ =
                     let s_fun = indent s_fun
                     line s_fun $"US{i} x;"
@@ -557,12 +562,7 @@ let codegen (globals : _ ResizeArray, fwd_dcls : _ ResizeArray, types : _ Resize
             )
     and uheap _ : UnionRec = raise_codegen_error "Recursive unions aren't allowed in the Cuda C++ backend due to them needing to be heap allocated."
 
-    global' "#pragma warning(disable: 4101 4065 4060)"
-    global' "// Add these as extra argument to the compiler to suppress the rest:"
-    global' "// --diag-suppress 186 --diag-suppress 177 --diag-suppress 550"
-    import "cstdint"
-    import "array"
-
+    global' "template <typename el, int dim> struct array { el v[dim]; };"
 
     fun vs (x : TypedBind []) ->
         match binds_last_data x |> data_term_vars |> term_vars_to_tys with

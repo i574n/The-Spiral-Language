@@ -2,6 +2,7 @@
 
 open Spiral
 open Spiral.Tokenize
+open Spiral.Startup
 open Spiral.BlockParsing
 open Spiral.PartEval.Main
 open Spiral.CodegenUtils
@@ -206,6 +207,7 @@ let codegen (env : PartEvalResult) (x : TypedBind []) =
             |> simple
         match a with
         | TyMacro a -> a |> List.map (function CMText x -> x | CMTerm x -> tup x | CMType x -> tup_ty x | CMTypeLit x -> type_lit x) |> String.concat "" |> simple
+        | TySizeOf t -> simple $"sizeof<{tup_ty t}>"
         | TyIf(cond,tr,fl) ->
             complex <| fun s ->
             line s (sprintf "if %s then" (tup cond))
@@ -216,6 +218,11 @@ let codegen (env : PartEvalResult) (x : TypedBind []) =
                 line s "else"
                 binds (indent s) fl
         | TyJoinPoint(a,args) -> simple (jp (a, args))
+        | TyBackendSwitch m ->
+            let backend = "Fsharp"
+            match Map.tryFind backend m with
+            | Some b -> binds s b
+            | None -> raise_codegen_error $"Cannot find the backend \"{backend}\" in the TyBackendSwitch."
         | TyBackend(_,_,(r,_)) -> raise_codegen_error_backend r "The F# backend does not support nesting other backends."
         | TyWhile(a,b) ->
             complex <| fun s ->
@@ -332,6 +339,7 @@ let codegen (env : PartEvalResult) (x : TypedBind []) =
             | BitwiseAnd, [a;b] -> sprintf "%s &&& %s" (tup a) (tup b)
             | BitwiseOr, [a;b] -> sprintf "%s ||| %s" (tup a) (tup b)
             | BitwiseXor, [a;b] -> sprintf "%s ^^^ %s" (tup a) (tup b)
+            | BitwiseComplement, [a] -> sprintf "~~~%s" (tup a)
 
             | ShiftLeft, [a;b] -> sprintf "%s <<< %s" (tup a) (tup b)
             | ShiftRight, [a;b] -> sprintf "%s >>> %s" (tup a) (tup b)

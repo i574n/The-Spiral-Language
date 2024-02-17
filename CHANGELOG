@@ -1,3 +1,64 @@
+2.7.5 (2/14/2024)
+
+* Fixed the codegen of tuples and nominals in arrays for the Cuda backend. The error is still in the other C++ backend, but that one is slated for demolition.
+
+2.7.4 (2/12/2024)
+
+* Added the `UsesOriginalNominals` operation to the language. 
+
+2.7.3 (2/3/2024)
+
+* Significantly extended the functionality of `sizeof`. Now it will work on any type.
+
+2.7.2 (2/2/2024)
+
+* Fix the server crash error when a nominal had too many type arguments.
+
+2.7.1 (1/31/2024)
+
+* Changed the Python + Cuda codegen for maximum NVRTC compatibility. 
+
+2.7.0 (1/24/2024)
+
+Updated the project so it uses .NET 8. It will require the .NET 8 SDK to run henceforth.
+
+2.6.1 (1/18/2024)
+
+* Made the [] and the ;[] patterns allowed immediately in an inl without the parenthesis.
+* ArrayLength now accesses the size property to get the total number of elements instead of using len in the Python backend.
+
+2.6.0 (1/17/2024)
+
+Made the default ints and floats selectable from the language settings in VS Code.
+
+* Implemented BackendSwitch. Now it should be possible to write backend polymorphic code.
+* Implemented UsesOriginalTermVars. This is used for extra security in tensor reordering operations.
+* Fixed an error in the Python + Cuda codegen where indexing into an array returned a 0-dim CuPy array instead of a value.
+
+2.5.7 (12/28/2023)
+
+* Fixed an error in the CUDA back end, where the method forward declarations weren't printed with the __device__ annotation. 
+
+2.5.6 (12/27/2023)
+
+* Made some changes that should hopefully make reconnects in the vs code extension client work even after the connection has been broken for a prolonged amount of time, such as when the computer goes to sleep.
+
+2.5.5 (12/25/2023)
+
+* Fixed a minor error in the error printing for RecordFoldBack.
+
+2.5.4 (12/21/2023)
+
+* Added the SymbolToString op to the language.
+
+2.5.3 (12/16/2023)
+
+* Added bitwise complement unary operator to the language.
+
+2.5.2 (11/3/2023)
+
+* Fixed some of the compilation bugs in the Cuda backend. Now tuple and union types should be usable. 
+
 2.5.1 (11/3/2023)
 
 * Removed the Python backend.

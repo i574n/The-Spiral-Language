@@ -5,6 +5,7 @@ open System.Collections.Generic
 open Spiral
 open VSCTypes
 open Spiral.Tokenize
+open Spiral.Startup
 open Spiral.BlockParsing
 open Spiral.PartEval.Prepass
 open Spiral.HashConsing
@@ -109,6 +110,7 @@ type TypedBind =
 and TypedOp = 
     | TyMacro of CodeMacro list
     | TyOp of Op * Data list
+    | TyBackendSwitch of Map<string, TypedBind []>
     | TyUnionBox of string * Data * Union
     | TyUnionUnbox of TyV list * Union * Map<string,Data list * TypedBind []> * TypedBind [] option
     | TyIntSwitch of TyV * TypedBind [] [] * TypedBind []
@@ -120,6 +122,7 @@ and TypedOp =
     | TyFailwith of Ty * Data
     | TyApply of TyV * Data
     | TyConv of Ty * Data
+    | TySizeOf of Ty
     | TyArrayLiteral of Ty * Data list
     | TyArrayCreate of Ty * Data
     | TyArrayLength of Ty * Data
@@ -215,6 +218,30 @@ let rdata_free_vars call_data =
         | ReSymbol _ | ReLit _ | ReTLit _ | ReB -> ()
     Array.iter g call_data
     free_vars.ToArray()
+
+let data_term_vars' call_data =
+    let term_vars = ResizeArray(64)
+    let rec f = function
+        | DPair(a,b) -> f a; f b
+        | DForall(_,a,_,_,_) | DFunction(_,_,a,_,_,_) -> Array.iter f a
+        | DRecord l -> Map.iter (fun _ -> f) l
+        | DLit _ | DV _ as x -> term_vars.Add(x)
+        | DUnion(a,_) | DNominal(a,_) -> f a
+        | DSymbol _ | DTLit _ | DB -> ()
+    f call_data
+    term_vars.ToArray()
+    
+let data_nominals call_data =
+    let term_vars = ResizeArray(64)
+    let rec f = function
+        | DPair(a,b) -> f a; f b
+        | DForall(_,a,_,_,_) | DFunction(_,_,a,_,_,_) -> Array.iter f a
+        | DRecord l -> Map.iter (fun _ -> f) l
+        | DLit _ | DV _ 
+        | DUnion _ | DNominal _ as x -> term_vars.Add(x)
+        | DSymbol _ | DTLit _ | DB -> ()
+    f call_data
+    term_vars.ToArray()
 
 let data_term_vars call_data =
     let term_vars = ResizeArray(64)
@@ -1289,6 +1316,28 @@ let peval (env : TopEnv) (x : E) =
             let mutable r = Unchecked.defaultof<_>
             if List.exists (fun (a',b) -> is_unify (a,ty s a') && (r <- term s b; true)) b 
             then r else raise_type_error s <| sprintf "Typecase miss.\nGot: %s" (show_ty a)
+        | EOp(_,BackendSwitch,l) ->
+            let mutable ty = None
+            let m = (Map.empty, l) ||> List.fold (fun m -> function
+                | EPair(r,ELit(_,LitString backend),b) -> 
+                    let body,ty' = term_scope s b
+                    match ty with
+                    | Some ty -> if ty <> ty' then raise_type_error s $"The return type of backend {backend} does not match that of the rest.\nGot: {show_ty ty'}\nExpected: {show_ty ty}"
+                    | None -> ty <- Some ty'
+                    Map.add backend body m
+                | _ -> raise_type_error s "BackendSwitch should be a list of (string literal,body) pairs."
+                )
+            push_typedop s (TyBackendSwitch m) ty.Value
+        | EOp(_,UsesOriginalTermVars,[a;b]) ->
+            let a = term s a |> data_term_vars'
+            let b = term s b |> data_term_vars'
+            let c = a.Length = b.Length && HashSet(a,HashIdentity.Reference).SetEquals(b)
+            DLit(LitBool c)
+        | EOp(_,UsesOriginalNominals,[a;b]) ->
+            let a = term s a |> data_nominals
+            let b = term s b |> data_nominals
+            let c = a.Length = b.Length && HashSet(a,HashIdentity.Reference).SetEquals(b)
+            DLit(LitBool c)
         | EOp(_,While,[cond;body]) -> 
             match term_scope s cond with
             | [|TyLocalReturnOp(_,TyJoinPoint cond,_)|], ty ->
@@ -1329,6 +1378,10 @@ let peval (env : TopEnv) (x : E) =
             match term s a with
             | DLit(LitString a) -> DSymbol a
             | a -> raise_type_error s <| sprintf "Expected a string literal.\nGot: %s" (show_data a)
+        | EOp(_,SymbolToString,[a]) -> 
+            match term s a with
+            | DSymbol a -> DLit (LitString a)
+            | a -> raise_type_error s <| sprintf "Expected a symbol.\nGot: %s" (show_data a)
         | EOp(_,TypeToSymbol,[EType(_,a)]) -> 
             match ty s a with
             | YSymbol a -> DSymbol a
@@ -1454,7 +1507,7 @@ let peval (env : TopEnv) (x : E) =
         | EOp(_,RecordFoldBack,[a;b;c]) ->
             match term3 s a b c with
             | a, state, DRecord l -> Map.foldBack (fun k v state -> apply s (a, record3 ("state", state) ("key", DSymbol k) ("value", v))) l state
-            | _, r, _ -> raise_type_error s <| sprintf "Expected a record.\nGot: %s" (show_data r)
+            | _, _, r -> raise_type_error s <| sprintf "Expected a record.\nGot: %s" (show_data r)
         | EOp(_,RecordLength,[a]) ->
             match term s a with
             | DRecord l -> Map.count l |> LitInt32 |> DLit
@@ -1829,6 +1882,24 @@ let peval (env : TopEnv) (x : E) =
                     else raise_type_error s <| sprintf "The type of the two arguments needs to be a int type.\nGot: %s" (show_ty a_ty)
                 else
                     raise_type_error s <| sprintf "The two sides need to have the same int types.\nGot: %s and %s." (show_ty a_ty) (show_ty b_ty)
+        | EOp(_,BitwiseComplement,[a]) ->
+            let inline op a = ~~~a
+            match term s a with
+            | DLit a ->
+                match a with
+                | LitInt8 a -> op a |> LitInt8 |> DLit
+                | LitInt16 a -> op a |> LitInt16 |> DLit
+                | LitInt32 a -> op a |> LitInt32 |> DLit
+                | LitInt64 a -> op a |> LitInt64 |> DLit
+                | LitUInt8 a -> op a |> LitUInt8 |> DLit
+                | LitUInt16 a -> op a |> LitUInt16 |> DLit
+                | LitUInt32 a -> op a |> LitUInt32 |> DLit
+                | LitUInt64 a -> op a |> LitUInt64 |> DLit
+                | a -> raise_type_error s <| sprintf "The literal must be an int.\nGot: %s" (show_lit a)
+            | a ->
+                let a_ty = data_to_ty s a
+                if is_any_int a_ty then push_op s BitwiseComplement a a_ty
+                else raise_type_error s <| sprintf "The type of the two arguments needs to be a int type.\nGot: %s" (show_ty a_ty)
         | EOp(_,ShiftLeft,[a;b]) -> 
             let inline op a b = a <<< b
             match term2 s a b with
@@ -2161,7 +2232,7 @@ let peval (env : TopEnv) (x : E) =
             | YPrim (Int16T | UInt16T) -> DLit (LitInt32 2)
             | YPrim (Int32T | UInt32T | Float32T) -> DLit (LitInt32 4)
             | YPrim (Int64T | UInt64T | Float64T) -> DLit (LitInt32 8)
-            | a -> raise_type_error s $"Expected an int or a float type.\nGot: {show_ty a}"
+            | a -> push_typedop s (TySizeOf a) (YPrim Int32T) 
         | EOp(_,FreeVars,[a]) ->
             let x = term s a |> data_free_vars
             Array.foldBack (fun x s -> DPair(DV x,s)) x DB
