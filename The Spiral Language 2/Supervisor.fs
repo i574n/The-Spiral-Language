@@ -546,6 +546,8 @@ open Microsoft.Extensions.DependencyInjection
 open Microsoft.Extensions.Logging
 
 let [<EntryPoint>] main args =
+    Scheduler.Global.setCreate { Scheduler.Create.Def with MaxStackSize = 1024 * 8192 |> Some }
+
     let env = Startup.parse args
 
     let uri_server = $"http://localhost:{env.port}"
