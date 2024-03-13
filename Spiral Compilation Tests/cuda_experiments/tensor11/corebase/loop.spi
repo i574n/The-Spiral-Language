@@ -73,18 +73,26 @@ inl div forall dim. (dim : dim) (a : dim) : dim = real
 // The second part of the result can be iterated over with a linear loop.
 // The elementwise product of the two sides of the result equals the original dimension.
 inl rigid_split forall dim. (i : int) (dim : dim) : dim * dim =
-    inl a, _ = real
+    inl a, (i : int) = real
         open real_core
         struct.mapFoldBack (fun dim i => 
             inl x = min dim i
             x, i / x
             ) dim i
+    assert (i = 1) "The integer length must be distributed in its entirety."
     a, div dim a
 
+
 // Calculates the integer product of the argument.
-inl prod forall dim. (dim : dim) : int = real struct.foldBack (*) dim 1
+inl prod forall dim. (dim : dim) : int = real struct.prod dim
 
 type range dim = {from : int; nearTo : dim; by : int}
+
+// Projects the iterator into a small and linear component so that elementwise product of `dim_small * dim_linear = nearTo`.
+// Also, `proj_small = proj dim_small from`.
+inl rigid_split' forall dim. ({from nearTo by} : range dim) : {proj_small : dim; dim_small : dim; dim_linear : dim} =
+    inl dim_small, dim_linear = rigid_split by nearTo
+    {dim_small dim_linear proj_small = proj dim_small from}
 
 inl projective forall dim. ({from nearTo by} : range dim) (body : dim -> ()) : () =
     forBy' {from by nearTo=prod nearTo} (proj nearTo >> body)
@@ -104,7 +112,7 @@ inl linear forall dim. (dim : dim) body : () =
         foldBack ((::) `int) dim (Nil `int)
     inl list_to_dim (l : list int) : dim = real
         open struct
-        inl x, [] = infer_mapFoldBack (forall el. (x :: l) => x, l) `dim l in x
+        inl x, [] = infer_mapFoldBack `dim (forall el. (x :: l) => x, l) l in x
     listm.foldBack (fun nearTo on_success l => 
         for' {from=0; nearTo} (fun i => on_success (i :: l))
         ) (dim_to_list dim) (list_to_dim >> body) []
