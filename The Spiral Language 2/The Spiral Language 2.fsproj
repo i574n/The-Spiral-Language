@@ -71,13 +71,13 @@
     <PackageReference Include="FSharpx.Collections" Version="3.1.0" />
     <PackageReference Include="Hopac" Version="0.5.1" />
 
-    <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" Version="9.0.0-preview.2.24128.4" />
+    <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" Version="9.0.0-preview.1.24081.5" />
 
     <PackageReference Include="FSharp.Control.AsyncSeq" Version="3.2.1" />
     <PackageReference Include="System.CommandLine" Version="2.0.0-beta4.22272.1" />
     <PackageReference Include="System.Reactive.Linq" Version="6.0.1-preview.1" />
 
-    <PackageReference Include="FSharp.Core" Version="8.0.300-beta.24080.5" />
+    <PackageReference Update="FSharp.Core" Version="8.0.300-beta.24080.5" />
   </ItemGroup>
 
 </Project>
