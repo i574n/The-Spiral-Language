@@ -5,14 +5,14 @@ inl fold f s l =
     inl rec body s = function Cons(x,x') => loop (f s x) x' | Nil => s
     and inl loop s l =
         if var_is l then inl ~s = s in join body s l
-        else body s l 
+        else body s l
     loop s l
 // Folds the list from the end to the beginning.
 inl foldBack f l s =
     inl rec body s = function Cons(x,x') => f x (loop s x') | Nil => s
     and inl loop s l =
         if var_is l then inl ~s = s in join body s l
-        else body s l 
+        else body s l
     loop s l
 // Reverses a list.
 inl rev l = fold (fun s x => Cons(x,s)) Nil l
@@ -37,10 +37,10 @@ let toArray forall (ar : * -> * -> *) {create; set} dim {number; int} el. (l : l
     ar
 // Initializes the list given a count and the mapping function. If the counter is statically known, it will create a list whose length is known at compile time.
 inl init i f =
-    inl rec body s = 
+    inl rec body s =
         if s < i then f s :: loop (s+1)
         else []
     and inl loop s =
         if var_is i then inl ~s = s in join body s
-        else body s 
+        else body s
     loop 0
