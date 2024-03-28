@@ -408,10 +408,10 @@ let supervisor_server (default_env : Startup.DefaultEnv) atten (errors : Supervi
                                         try
                                             do! $"{ex}" |> FileSystem.writeAllTextAsync trace_file
                                         with ex ->
-                                            trace Critical (fun () -> $"file_build / ex: {ex |> printException}") getLocals
+                                            trace Critical (fun () -> $"file_build / ex: {ex |> formatException}") getLocals
                                     }
                                     |> Async.Start
-                                trace Critical (fun () -> $"file_build / ex: {ex |> printException}") getLocals
+                                trace Critical (fun () -> $"file_build / ex: {ex |> formatException}") getLocals
                                 BuildFatalError(ex.Message)
                     | None ->
                         // BuildFatalError $"Cannot find `main` in file {Path.GetFileNameWithoutExtension file}."
@@ -510,7 +510,7 @@ type SpiralHub(supervisor : Supervisor) =
                     try
                         do! x |> FileSystem.writeAllTextAsync trace_file
                     with ex ->
-                        trace Critical (fun () -> $"ClientToServerMsg / ex: {ex |> printException}") getLocals
+                        trace Critical (fun () -> $"ClientToServerMsg / ex: {ex |> formatException}") getLocals
                 }
                 |> Async.Start
 
@@ -633,14 +633,14 @@ let [<EntryPoint>] main args =
                         let resultPath = old_dir </> $"{Path.GetFileNameWithoutExtension path}_result.json"
                         do! result |> FileSystem.writeAllTextAsync resultPath
                 with ex ->
-                    trace Critical (fun () -> "watchDirectory / iterAsyncParallel / ex: {ex |> printException}") getLocals
+                    trace Critical (fun () -> "watchDirectory / iterAsyncParallel / ex: {ex |> formatException}") getLocals
             | _ -> ()
         })
         |> Async.StartChild
         |> Async.Ignore
         |> Async.Start
 
-    
+
     printfn $"Starting the Spiral Server. It is bound to: {uri_server}"
     app.Run()
     0
