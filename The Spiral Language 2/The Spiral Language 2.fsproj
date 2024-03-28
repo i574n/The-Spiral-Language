@@ -27,6 +27,9 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Include="../../../lib/spiral/common.fsx" />
+    <Compile Include="../../../lib/spiral/date_time.fsx" />
+    <Compile Include="../../../lib/spiral/file_system.fsx" />
     <Compile Include="../../../lib/fsharp/Common.fs" />
     <Compile Include="../../../lib/fsharp/CommonFSharp.fs" />
     <Compile Include="../../../lib/fsharp/Async.fs" />
