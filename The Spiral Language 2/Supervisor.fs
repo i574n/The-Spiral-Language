@@ -408,10 +408,10 @@ let supervisor_server (default_env : Startup.DefaultEnv) atten (errors : Supervi
                                         try
                                             do! $"{ex}" |> FileSystem.writeAllTextAsync trace_file
                                         with ex ->
-                                            trace Critical (fun () -> $"file_build / ex: {ex |> formatException}") getLocals
+                                            trace Critical (fun () -> $"file_build / ex: {ex |> Sm.format_exception}") getLocals
                                     }
                                     |> Async.Start
-                                trace Critical (fun () -> $"file_build / ex: {ex |> formatException}") getLocals
+                                trace Critical (fun () -> $"file_build / ex: {ex |> Sm.format_exception}") getLocals
                                 BuildFatalError(ex.Message)
                     | None ->
                         // BuildFatalError $"Cannot find `main` in file {Path.GetFileNameWithoutExtension file}."
@@ -510,7 +510,7 @@ type SpiralHub(supervisor : Supervisor) =
                     try
                         do! x |> FileSystem.writeAllTextAsync trace_file
                     with ex ->
-                        trace Critical (fun () -> $"ClientToServerMsg / ex: {ex |> formatException}") getLocals
+                        trace Critical (fun () -> $"ClientToServerMsg / ex: {ex |> Sm.format_exception}") getLocals
                 }
                 |> Async.Start
 
@@ -629,11 +629,11 @@ let [<EntryPoint>] main args =
                     let! result = connection.InvokeAsync<string>("ClientToServerMsg", json) |> Async.AwaitTask
                     let oldPath = old_dir </> path
                     do! fullPath |> FileSystem.moveFileAsync oldPath |> Async.Ignore
-                    if result |> String.trim |> String.length > 0 then
+                    if result |> Sm.trim |> String.length > 0 then
                         let resultPath = old_dir </> $"{Path.GetFileNameWithoutExtension path}_result.json"
                         do! result |> FileSystem.writeAllTextAsync resultPath
                 with ex ->
-                    trace Critical (fun () -> "watchDirectory / iterAsyncParallel / ex: {ex |> formatException}") getLocals
+                    trace Critical (fun () -> "watchDirectory / iterAsyncParallel / ex: {ex |> Sm.format_exception}") getLocals
             | _ -> ()
         })
         |> Async.StartChild
