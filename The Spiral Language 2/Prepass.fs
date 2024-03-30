@@ -61,6 +61,7 @@ and [<ReferenceEquality>] E =
     | ESeq of Range * E * E
     | EHeapMutableSet of Range * E * (Range * E) list * E
     | EReal of Range * E
+    | EExists of Range * T list * E
     | EMacro of Range * Macro list * T
     | EPrototypeApply of Range * prototype_id: GlobalId * T
     | EPatternMemo of E
@@ -68,6 +69,7 @@ and [<ReferenceEquality>] E =
     // Regular pattern matching
     | ELet of Range * Id * E * E
     | EUnbox of Range * symbol: string * Id * body: E * on_succ: E * on_fail: E
+    | EExistsTest of Range * bind: Id * pat_type: Id [] * pat: Id * on_succ: E * on_fail: E
     | EPairTest of Range * bind: Id * pat1: Id * pat2: Id * on_succ: E * on_fail: E
     | ESymbolTest of Range * string * bind: Id * on_succ: E * on_fail: E
     | ERecordTest of Range * PatRecordMember list * bind: Id * on_succ: E * on_fail: E
@@ -81,6 +83,7 @@ and [<ReferenceEquality>] E =
 and [<ReferenceEquality>] T =
     | TArrow' of Scope * Id * T
     | TArrow of Id * T
+    | TExists
     | TJoinPoint' of Range * Scope * T
     | TJoinPoint of Range * T
     | TPatternRef of T ref
@@ -155,6 +158,7 @@ module Printable =
         | ESeq of PE * PE
         | EHeapMutableSet of PE * PE list * PE
         | EReal of PE
+        | EExists of PT list * PE
         | EMacro of PMacro list * PT
         | EPrototypeApply of prototype_id: GlobalId * PT
         | EPatternMemo of PE
@@ -162,6 +166,7 @@ module Printable =
         // Regular pattern matching
         | ELet of Id * PE * PE
         | EUnbox of Id * string * PE * PE * PE
+        | EExistsTest of bind: Id * pat_type: Id [] * pat: Id * on_succ: PE * on_fail: PE
         | EPairTest of bind: Id * pat1: Id * pat2: Id * on_succ: PE * on_fail: PE
         | ESymbolTest of string * bind: Id * on_succ: PE * on_fail: PE
         | ERecordTest of PPatRecordMember list * bind: Id * on_succ: PE * on_fail: PE
@@ -175,6 +180,7 @@ module Printable =
     and [<ReferenceEquality>] PT =
         | TArrow' of Scope * Id * PT
         | TArrow of Id * PT
+        | TExists
         | TJoinPoint' of Scope * PT
         | TJoinPoint of PT
         | TB
@@ -254,6 +260,7 @@ module Printable =
             | E.ESeq(_,a,b) -> ESeq(term a,term b)
             | E.EHeapMutableSet(_,a,b,c) -> EHeapMutableSet(term a,List.map (snd >> term) b,term c)
             | E.EReal(_, a) -> EReal(term a)
+            | E.EExists(_, a, b) -> EExists(List.map ty a, term b)
             | E.EMacro(_,a,b) ->
                 let a = a |> List.map (function
                     | Macro.MText a -> MText a
@@ -268,6 +275,7 @@ module Printable =
             // Regular pattern matching
             | E.ELet(_,a,b,c) -> ELet(a,term b,term c)
             | E.EUnbox(_,q,a,b,c,d) -> EUnbox(a,q,term b,term c,term d)
+            | E.EExistsTest(_,a,l,q,d,e) -> EExistsTest(a,l,q,term d,term e)
             | E.EPairTest(_,a,b,c,d,e) -> EPairTest(a,b,c,term d,term e)
             | E.ESymbolTest(_,a,b,c,d) -> ESymbolTest(a,b,term c,term d)
             | E.ERecordTest(_,a,b,c,d) ->
@@ -285,6 +293,7 @@ module Printable =
             | T.TPatternRef a -> ty !a
             | T.TArrow'(a,b,c) -> TArrow'(a,b,ty c)
             | T.TArrow(a,b) -> TArrow(a,ty b)
+            | T.TExists -> TExists
             | T.TJoinPoint'(_,a,b) -> TJoinPoint'(a,ty b)
             | T.TJoinPoint(_,a) -> TJoinPoint(ty a)
             | T.TB _ -> TB
@@ -411,12 +420,14 @@ let propagate x =
         | EOp(_,_,a) -> List.fold (fun s a -> s + term a) empty a
         | EHeapMutableSet(_,a,b,c) -> term a + List.fold (fun s (_,a) -> s + term a) empty b + term c
         | EIfThenElse(_,a,b,c) -> term a + term b + term c
+        | EExists(_,a,b) -> List.fold (fun s a -> s + ty a) (term b) a
         | EPatternMiss a | EReal(_,a) -> term a
         | EMacro(_,a,b) -> List.fold (fun s -> function MLitType x | MType x -> s + ty x | MTerm x -> s + term x | MText _ -> s) (ty b) a
         | EPatternMemo a -> Utils.memoize dict term a
         // Regular pattern matching
         | ELet(_,bind,body,on_succ) -> term on_succ - bind + term body
         | EUnbox(_,_,bind,body,on_succ,on_fail) -> term on_succ - bind + term body + term on_fail
+        | EExistsTest(_,bind,pat_type,pat,on_succ,on_fail) -> singleton_term bind + (Array.fold (-.) (term on_succ) pat_type - pat) + term on_fail
         | EPairTest(_,bind,pat1,pat2,on_succ,on_fail) -> singleton_term bind + (term on_succ - pat1 - pat2) + term on_fail
         | ESymbolTest(_,_,bind,on_succ,on_fail) 
         | EUnitTest(_,bind,on_succ,on_fail) 
@@ -439,7 +450,7 @@ let propagate x =
                 s + a + b
                 ) (ty a) b
     and ty = function
-        | TJoinPoint' _ | TArrow' _ | TSymbol _ | TPrim _ | TNominal _ | TLit _ | TB _ -> empty
+        | TExists | TJoinPoint' _ | TArrow' _ | TSymbol _ | TPrim _ | TNominal _ | TLit _ | TB _ -> empty
         | TPatternRef a -> ty !a
         | TV i -> singleton_ty i
         | TMetaV i -> {empty with ty = {|empty.ty with range = Some(i,i)|} }
@@ -516,8 +527,10 @@ let resolve (scope : Dictionary<obj,PropagatedVars>) x =
                 | WVar(_,a) -> f a)
         | ENominal(_,a,b) | ETypeApply(_,a,b) | EAnnot(_,a,b) -> f a; ty env b
         | EOp(_,_,a) -> List.iter f a
+        | EExists(_,a,b) -> List.iter (ty env) a; f b 
         | EPatternMiss a | EReal(_,a) -> f a
         | EArray(_,a,b) -> List.iter f a; ty env b
+        | EExistsTest(_,_,_,_,a,b)
         | EUnitTest(_,_,a,b) | ESymbolTest(_,_,_,a,b) | EPairTest(_,_,_,_,a,b) | ELitTest(_,_,_,a,b)
         | ELet(_,_,a,b) | EIfThen(_,a,b) | EPair(_,a,b) | ESeq(_,a,b) | EApply(_,a,b) -> f a; f b
         | EHeapMutableSet(_,a,b,c) -> f a; List.iter (snd >> f) b; f c
@@ -535,7 +548,7 @@ let resolve (scope : Dictionary<obj,PropagatedVars>) x =
     and ty (env : ResolveEnv) x = 
         let f = ty env
         match x with
-        | TJoinPoint' _ | TArrow' _ | TNominal _ | TPrim _ | TSymbol _ | TV _ | TMetaV _ | TLit _ | TB _ -> ()
+        | TExists | TJoinPoint' _ | TArrow' _ | TNominal _ | TPrim _ | TSymbol _ | TV _ | TMetaV _ | TLit _ | TB _ -> ()
         | TPatternRef a -> f !a
         | TArrow(_,a) -> subst env x; f a
         | TApply(_,a,b) | TFun(_,a,b) | TPair(_,a,b) -> f a; f b
@@ -657,6 +670,7 @@ let lower (scope : Dictionary<obj,PropagatedVars>) x =
         | EHeapMutableSet(r,a,b,c) -> EHeapMutableSet(r,f a,List.map (fun (a,b) -> a, f b) b,f c)
         | EPatternMiss a -> EPatternMiss(f a)
         | EReal(r,a) -> EReal(r,f a)
+        | EExists(r,a,b) -> EExists(r,List.map (g env) a,f b)
         | EMacro(r,a,b) -> 
             let a = a |> List.map (function
                 | MText _ as x -> x
@@ -686,6 +700,13 @@ let lower (scope : Dictionary<obj,PropagatedVars>) x =
             let pat2,env = adj_term env pat2
             let on_succ = term env_rec env on_succ
             EPairTest(r,i,pat1,pat2,on_succ,on_fail)
+        | EExistsTest(r,i,pat_type,pat,on_succ,on_fail) -> 
+            let on_fail = term env_rec env on_fail
+            let i = env.term.var.[i]
+            let pat,env = adj_term env pat
+            let pat_type,env = Array.mapFold adj_ty env pat_type
+            let on_succ = term env_rec env on_succ
+            EExistsTest(r,i,pat_type,pat,on_succ,on_fail)
         | ESymbolTest(r,a,i,on_succ,on_fail) -> 
             let on_fail = term env_rec env on_fail
             let i = env.term.var.[i]
@@ -729,7 +750,7 @@ let lower (scope : Dictionary<obj,PropagatedVars>) x =
         let f = ty' case_tmetav env_rec env
         match x with
         | TMetaV i -> case_tmetav i
-        | TJoinPoint' _ | TArrow' _ | TNominal  _ | TPrim _ | TSymbol _ | TLit _ | TB _ as x -> x
+        | TExists | TJoinPoint' _ | TArrow' _ | TNominal  _ | TPrim _ | TSymbol _ | TLit _ | TB _ as x -> x
         | TPatternRef a -> f !a
         | TJoinPoint(r,a) as x ->
             let scope, env = scope env x
@@ -817,20 +838,25 @@ let prepass package_id module_id path (top_env : PrepassTopEnv) =
         let patvar () = let x = var_count in var_count <- var_count+1; x
         let loop (pat, on_succ) on_fail =
             let mutable dict = Map.empty
+            let mutable dict_type = Map.empty
             let pat_refs_term = ResizeArray()
             //let pat_ref_term x = let re = ref Unchecked.defaultof<_> in pat_refs_term.Add(x,dict,re); EPatternRef re
             let pat_ref_term' x k =
                 let re = ref Unchecked.defaultof<_>
                 let r = k (EPatternRef re)
-                pat_refs_term.Add(x,dict,re)
+                pat_refs_term.Add(x,(dict,dict_type),re)
                 r
             let pat_refs_ty = ResizeArray()
-            let pat_ref_ty x = let re = ref Unchecked.defaultof<_> in pat_refs_ty.Add(x,dict,re); TPatternRef re
+            let pat_ref_ty x = let re = ref Unchecked.defaultof<_> in pat_refs_ty.Add(x,(dict,dict_type),re); TPatternRef re
             let rec cp id pat on_succ on_fail =
                 let v x =
                     match Map.tryFind x dict with
                     | Some x -> x
                     | None -> let v = patvar() in dict <- Map.add x v dict; v
+                let tv x =
+                    match Map.tryFind x dict_type with
+                    | Some x -> x
+                    | None -> let v = patvar() in dict_type <- Map.add x v dict_type; v
                 let step pat on_succ =
                     match pat with
                     | PatVar(_,x) -> v x, on_succ
@@ -848,6 +874,10 @@ let prepass package_id module_id path (top_env : PrepassTopEnv) =
                     let b,on_succ = step b on_succ
                     let a,on_succ = step a on_succ
                     EPairTest(p r,id,a,b,on_succ,on_fail)
+                | PatExists(r,l,b) -> 
+                    let pat_type = List.map (snd >> tv) l |> List.toArray
+                    let pat,on_succ = step b on_succ
+                    EExistsTest(p r,id,pat_type,pat,on_succ,on_fail)
                 | PatArray(r,a) ->
                     let r = p r
                     let ar_ids,on_succ = List.mapFoldBack step a on_succ
@@ -890,8 +920,12 @@ let prepass package_id module_id path (top_env : PrepassTopEnv) =
             (pat_refs_term, pat_refs_ty), pat_ref_term' on_succ (fun on_succ -> cp id pat on_succ (EPatternMemo on_fail))
 
         let l, e = List.mapFoldBack loop clauses (EPatternMiss(EV id))
-        l |> List.iter (fun (terms,tys) -> // The reason I am not evaling it in place is because of the var count. I need to deal with the patterns first before replacing the strings in the body.
-            let env dict = {env with term = {|env.term with i=var_count; env=dict |> Map.fold (fun s k v -> Map.add k (EV v) s) env.term.env|} }
+        l |> List.iter (fun (terms,tys) -> // The reason I am not evaling it in place is because of the var count which is mutable. I need to deal with the patterns first before replacing the strings in the body.
+            let env (dict,dict_type) = 
+                {env with 
+                    term = {|env.term with i=var_count; env=dict |> Map.fold (fun s k v -> Map.add k (EV v) s) env.term.env|} 
+                    ty = {|env.ty with i=var_count; env=dict_type |> Map.fold (fun s k v -> Map.add k (TV v) s) env.ty.env|} 
+                    }
             terms |> Seq.iter (fun (a,dict,b) -> b := term (env dict) a)
             tys |> Seq.iter (fun (a,dict,b) -> b := ty (env dict) a)
             )
@@ -924,6 +958,7 @@ let prepass package_id module_id path (top_env : PrepassTopEnv) =
         | RawTVar(r,a) -> v_ty env a
         | RawTPair(r,a,b) -> TPair(p r,f a,f b)
         | RawTFun(r,a,b) -> TFun(p r,f a,f b)
+        | RawTExists(r,l,b) -> TExists
         | RawTRecord(r,l) -> TRecord(p r,Map.map (fun _ -> f) l)
         | RawTUnion(r,a,b) -> TUnion(p r,(Map.map (fun _ -> f) a,b))
         | RawTSymbol(r,a) -> TSymbol(p r,a)
@@ -1015,6 +1050,8 @@ let prepass package_id module_id path (top_env : PrepassTopEnv) =
         | RawSeq(r,a,b) -> ESeq(p r,f a,f b)
         | RawHeapMutableSet(r,a,b,c) -> EHeapMutableSet(p r,f a,List.map (fun a -> p (range_of_expr a), f a) b,f c)
         | RawReal(r,a) -> f a
+        | RawExists(r,Some a,b) -> EExists(p r, List.map (ty env) a, f b)
+        | RawExists(_,None,_) -> failwith "Compiler error: The exists' vars should have been added during `fill`."
         | RawMacro _ -> failwith "Compiler error: The macro's annotation should have been added during `fill`."
         | RawAnnot(_,RawMacro(r,a),b) ->
             let a = a |> List.map (function
@@ -1032,7 +1069,7 @@ let prepass package_id module_id path (top_env : PrepassTopEnv) =
         term = {|env=Map.empty; i=0; i_rec= -1|}
         ty = {|env=Map.empty; i=0|}
         }
-
+        
     let eval_type ((r,(name,kind)) : HoVar) on_succ env =
         let id, env = add_ty_var env name
         TArrow(id,on_succ env)

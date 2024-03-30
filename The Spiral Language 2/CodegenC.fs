@@ -44,7 +44,7 @@ let varc_data call_data =
         | DForall(_,a,_,_,_) | DFunction(_,_,a,_,_,_) -> Array.iter f a
         | DRecord l -> Map.iter (fun _ -> f) l
         | DV x -> v <- varc_add x 1 v
-        | DUnion(a,_) | DNominal(a,_) -> f a
+        | DExists(_,a) | DUnion(a,_) | DNominal(a,_) -> f a
         | DLit _ | DTLit _ | DSymbol _ | DB -> ()
     f call_data
     v
@@ -408,6 +408,7 @@ let codegen' (backend_type : CBackendType) (env : PartEvalResult) (x : TypedBind
         | YPrim a -> prim a
         | YArray a -> sprintf "Array%i *" (carray a).tag
         | YFun(a,b) -> sprintf "Fun%i *" (cfun (a,b)).tag
+        | YExists -> raise_codegen_error "Existentials are not supported at runtime. They are a compile time feature only."
         | a -> raise_codegen_error (sprintf "Compiler error: Type not supported in the codegen.\nGot: %A" a)
     and prim = function
         | Int8T -> "int8_t" 

@@ -20,7 +20,7 @@ type [<CustomComparison;CustomEquality>] L<'a,'b when 'a: equality and 'a: compa
         | _ -> false
     override a.GetHashCode() = match a with L(a,_) -> hash a
     interface IComparable with
-        member a.CompareTo(b) = 
+        member a.CompareTo(b) =
             match b with
             | :? L<'a,'b> as b -> match a,b with L(a,_), L(b,_) -> compare a b
             | _ -> raise <| ArgumentException "Invalid comparison for T."
@@ -36,7 +36,7 @@ type H<'a when 'a : equality>(x : 'a) =
     override _.GetHashCode() = h
 
 type StackSize = int
-type Nominal = {|body : T; id : GlobalId; name : string|} ConsedNode // TODO: When doing incremental compilation, make the `body` field a weak reference.
+type Nominal = {|body : T; id : GlobalId; name : string|} ConsedNode // TODO: When the time comes to implement incremental compilation, make the `body` field a weak reference.
 type Macro = Text of string | Type of Ty | TypeLit of Ty
 and Ty =
     | YB
@@ -44,6 +44,7 @@ and Ty =
     | YSymbol of string
     | YPair of Ty * Ty
     | YTypeFunction of body : T * ty : Ty [] * term_stack_size : StackSize * ty_stack_size : StackSize
+    | YExists
     | YRecord of Map<string, Ty>
     | YPrim of PrimitiveType
     | YArray of Ty
@@ -52,7 +53,7 @@ and Ty =
     | YNominal of Nominal
     | YApply of Ty * Ty
     | YLayout of Ty * Layout
-    | YUnion of Union 
+    | YUnion of Union
     | YMetavar of Id
 and Data =
     | DB
@@ -61,6 +62,7 @@ and Data =
     | DPair of Data * Data
     | DFunction of body : E * annot : T option * term : Data [] * ty : Ty [] * term_stack_size : StackSize * ty_stack_size : StackSize
     | DForall of body : E * term : Data [] * ty : Ty [] * term_stack_size : StackSize * ty_stack_size : StackSize
+    | DExists of vars_type : Ty [] * term : Data
     | DRecord of Map<string, Data>
     | DLit of Literal
     | DUnion of Data * Union
@@ -81,6 +83,7 @@ type RData =
     | ReSymbol of string
     | ReFunction of ConsedNode<E * RData [] * Ty []> // T option and stack sizes are entirely dependent on the body. And unlike in v0.09/v0.1 there are no reified join points.
     | ReForall of ConsedNode<E * RData [] * Ty []>
+    | ReExists of ConsedNode<Ty [] * RData>
     | ReRecord of ConsedNode<Map<string, RData>>
     | ReLit of Tokenize.Literal
     | ReTLit of Tokenize.Literal
@@ -93,7 +96,6 @@ type JoinPointKey =
     | JPMethod of E * ConsedNode<RData [] * Ty []>
     | JPClosure of E * ConsedNode<RData [] * Ty [] * Ty * Ty>
     
-
 type JoinPointCall = JoinPointKey * TyV []
 
 type CodeMacro =
@@ -160,6 +162,7 @@ let data_to_rdata (hc : HashConsTable) call_data =
             | DSymbol a -> ReSymbol a
             | DFunction(a,_,b,c,_,_) -> ReFunction(hc(a,Array.map f b,c))
             | DForall(a,b,c,_,_) -> ReFunction(hc(a,Array.map f b,c))
+            | DExists(a,b) -> ReExists(hc(a,f b))
             | DRecord l -> ReRecord(hc(Map.map (fun _ -> f) l))
             | DV(L(_,ty) as t) -> call_args.Add t; ReV(hc (call_args.Count-1,ty))
             | DLit a -> ReLit a
@@ -181,6 +184,7 @@ let rename_global_term (s : LangEnv) =
             | DPair(a,b) -> DPair(f a, f b)
             | DForall(body,a,b,c,d) -> DForall(body,Array.map f a,b,c,d)
             | DFunction(body,annot,a,b,c,d) -> DFunction(body,annot,Array.map f a,b,c,d)
+            | DExists(body,annot) -> DExists(body,annot)
             | DRecord l -> DRecord(Map.map (fun _ -> f) l)
             | DV(L(_,ty)) -> let x = DV(L(!s.i,ty)) in incr s.i; x
             | DUnion(a,b) -> DUnion(f a,b)
@@ -199,7 +203,7 @@ let data_free_vars call_data =
             | DForall(_,a,_,_,_) | DFunction(_,_,a,_,_,_) -> Array.iter f a
             | DRecord l -> Map.iter (fun _ -> f) l
             | DV(L _ as t) -> free_vars.Add t
-            | DUnion(a,_) | DNominal(a,_) -> f a
+            | DExists(_,a) | DUnion(a,_) | DNominal(a,_) -> f a
             | DSymbol _ | DLit _ | DTLit _ | DB -> ()
     f call_data
     free_vars.ToArray()
@@ -214,7 +218,7 @@ let rdata_free_vars call_data =
         | ReForall(C'((_,a,_),tag)) | ReFunction(C'((_,a,_),tag)) -> if m.Add tag then Array.iter g a
         | ReRecord(C'(l,tag)) -> if m.Add tag then Map.iter (fun _ -> g) l
         | ReV(C'((a,b),tag)) -> if m.Add tag then free_vars.Add(L(a,b))
-        | ReUnion(C'((a,_),tag)) | ReNominal(C'((a,_),tag)) -> if m.Add tag then g a
+        | ReExists(C'((_,a),tag)) | ReUnion(C'((a,_),tag)) | ReNominal(C'((a,_),tag)) -> if m.Add tag then g a
         | ReSymbol _ | ReLit _ | ReTLit _ | ReB -> ()
     Array.iter g call_data
     free_vars.ToArray()
@@ -226,7 +230,7 @@ let data_term_vars' call_data =
         | DForall(_,a,_,_,_) | DFunction(_,_,a,_,_,_) -> Array.iter f a
         | DRecord l -> Map.iter (fun _ -> f) l
         | DLit _ | DV _ as x -> term_vars.Add(x)
-        | DUnion(a,_) | DNominal(a,_) -> f a
+        | DExists(_,a) | DUnion(a,_) | DNominal(a,_) -> f a
         | DSymbol _ | DTLit _ | DB -> ()
     f call_data
     term_vars.ToArray()
@@ -238,7 +242,7 @@ let data_nominals call_data =
         | DForall(_,a,_,_,_) | DFunction(_,_,a,_,_,_) -> Array.iter f a
         | DRecord l -> Map.iter (fun _ -> f) l
         | DLit _ | DV _ 
-        | DUnion _ | DNominal _ as x -> term_vars.Add(x)
+        | DExists _ | DUnion _ | DNominal _ as x -> term_vars.Add(x)
         | DSymbol _ | DTLit _ | DB -> ()
     f call_data
     term_vars.ToArray()
@@ -251,7 +255,7 @@ let data_term_vars call_data =
         | DRecord l -> Map.iter (fun _ -> f) l
         | DLit x -> term_vars.Add(WLit x)
         | DV x -> term_vars.Add(WV x)
-        | DUnion(a,_) | DNominal(a,_) -> f a
+        | DExists(_,a) | DUnion(a,_) | DNominal(a,_) -> f a
         | DSymbol _ | DTLit _ | DB -> ()
     f call_data
     term_vars.ToArray()
@@ -312,6 +316,7 @@ let show_ty x =
         | YPair(a,b) -> p 25 (sprintf "%s * %s" (f 25 a) (f 24 b))
         | YSymbol x -> sprintf ".%s" x
         | YTypeFunction _ -> p 0 (sprintf "? => ?")
+        | YExists -> p 0 (sprintf "exists ?. ?")
         | YRecord l -> sprintf "{%s}" (l |> Map.toList |> List.map (fun (k,v) -> sprintf "%s : %s" k (f -1 v)) |> String.concat "; ")
         | YUnion l -> sprintf "{%s}" (l.Item.cases |> Map.toList |> List.map (fun (k,v) -> sprintf "%s : %s" k (f -1 v)) |> String.concat " | ")
         | YPrim x -> show_primt x
@@ -333,6 +338,9 @@ let show_data x =
         | DSymbol x -> sprintf ".%s" x
         | DFunction _ -> p 20 "? -> ?"
         | DForall _ -> p 0 "forall ?. ?"
+        | DExists(a,b) ->
+            let a = Array.map (show_ty >> sprintf "(%s)") a |> String.concat " "
+            p 0 $"exists {a}. %s{f 0 b}"
         | DRecord l -> sprintf "{%s}" (l |> Map.toList |> List.map (fun (k,v) -> sprintf "%s : %s" k (f -1 v)) |> String.concat "; ")
         | DLit a -> show_lit a
         | DTLit a -> $"`{show_lit a}"
@@ -498,7 +506,7 @@ let peval (env : TopEnv) (x : E) =
         | YPair(a,b) -> DPair(f a, f b) 
         | YSymbol a -> DSymbol a
         | YRecord l -> DRecord(Map.map (fun _ -> f) l)
-        | YUnion _ | YLayout _ | YPrim _ | YArray _ | YFun _ | YMacro _ as x -> let r = DV(L(!s.i,x)) in incr s.i; r
+        | YExists | YUnion _ | YLayout _ | YPrim _ | YArray _ | YFun _ | YMacro _ as x -> let r = DV(L(!s.i,x)) in incr s.i; r
         | YNominal _ | YApply _ as a -> DNominal(nominal_apply s a |> ty_to_data s, a)
         | YLit x -> DTLit x
         | YTypeFunction _ -> raise_type_error s "Cannot turn a type function into a runtime variable."
@@ -575,6 +583,7 @@ let peval (env : TopEnv) (x : E) =
                 | DTLit x -> YLit x
                 | DB -> YB
                 | DFunction(body,Some annot,gl_term,gl_ty,sz_term,sz_ty) -> ty (closure_env s (body,annot,gl_term,gl_ty,sz_term,sz_ty)) annot
+                | DExists _ -> YExists
                 | DFunction(_,None,_,_,_,_) -> raise_type_error s "Cannot convert a function that is not annotated into a type."
                 | DForall _ -> raise_type_error s "Cannot convert a forall into a type."
                 ) x
@@ -590,6 +599,7 @@ let peval (env : TopEnv) (x : E) =
                 | DNominal(DUnion(DPair(DSymbol k,v),b),b') -> dirty <- true; push_typedop_no_rewrite s (TyUnionBox(k,f v,b)) b'
                 | DUnion _ -> raise_type_error s "Compiler error: Malformed union"
                 | DNominal(a,b) -> DNominal(f a,b)
+                | DExists(_,b) -> dirty <- true; push_op s Dyn b YExists
                 | DLit (LitString _ as v) -> dirty <- true; push_op s Dyn x (lit_to_ty v)
                 | DLit v as x -> if do_lit then dirty <- true; push_op_no_rewrite s Dyn x (lit_to_ty v) else x
                 | DFunction(body,Some annot,term',ty',sz_term,sz_ty) -> dirty <- true; closure_convert s (body,annot,term',ty',sz_term,sz_ty) |> fst
@@ -629,6 +639,7 @@ let peval (env : TopEnv) (x : E) =
         | TArrow'(scope,i,body) -> 
             assert (i = scope.ty.free_vars.Length)
             YTypeFunction(body,Array.map (vt s) scope.ty.free_vars,scope.term.stack_size,scope.ty.stack_size)
+        | TExists -> YExists
         | TJoinPoint'(r,scope,body) ->
             let env_global_type = Array.map (vt s) scope.ty.free_vars
             let env_global_term = Array.map (v s) scope.term.free_vars
@@ -1034,7 +1045,12 @@ let peval (env : TopEnv) (x : E) =
             let a_ty = data_to_ty s a
             let b = ty s b
             if a_ty <> b then raise_type_error s <| sprintf "The body does not match the annotation.\nGot: %s\nExpected: %s" (show_ty a_ty) (show_ty b)
-            a
+            a            
+        | EExists(r,a,b) ->
+            let s = add_trace s r
+            let a = List.map (ty s) a |> List.toArray
+            let b = term s b
+            DExists(a,b)
         | EPatternMiss a -> raise_type_error s <| sprintf "Pattern miss.\nGot: %s" (show_data (term s a))
         | ETypePatternMiss a -> raise_type_error s <| sprintf "Pattern miss.\nGot: %s" (show_ty (ty s a))
         | EIfThenElse(r,cond,tr,fl) -> let s = add_trace s r in if_ s (term s cond) tr fl
@@ -1070,7 +1086,7 @@ let peval (env : TopEnv) (x : E) =
             push_typedop_no_rewrite s (TyMacro(a)) (ty s b)
         | EPrototypeApply(_,prot_id,b) ->
             let rec loop = function
-                | YNominal b -> 
+                | YNominal b ->
                     match env.prototypes_instances.TryGetValue((prot_id,b.node.id)) with
                     | true,x -> term s x
                     | _ -> raise_type_error s "An instance of the prototype being applied could be found in the dictionary."
@@ -1242,6 +1258,12 @@ let peval (env : TopEnv) (x : E) =
             let s = add_trace s r
             match v s bind with
             | DPair(a,b) -> store_term s p1 a; store_term s p2 b; term s on_succ
+            | _ -> term s on_fail
+        | EExistsTest(r,bind,pat_type,pat,on_succ,on_fail) ->
+            let s = add_trace s r
+            match v s bind with
+            | DExists(a,b) -> Array.iter2 (store_ty s) pat_type a; store_term s pat b; term s on_succ
+            | DV(L(_,YExists)) -> raise_type_error s "Runtime existentials cannot be destructured. They are a compile time feature only."
             | _ -> term s on_fail
         | ESymbolTest(r,a,bind,on_succ,on_fail) ->
             let s = add_trace s r
