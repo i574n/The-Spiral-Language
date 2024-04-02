@@ -75,7 +75,7 @@ let type_lit = function
     | YSymbol x -> x
     | x -> raise_codegen_error "Compiler error: Expecting a type literal in the macro." 
 
-type UnionRec = {tag : int; free_vars : Map<string, TyV[]>}
+type UnionRec = {tag : int; free_vars : Map<int * string, TyV[]>}
 type LayoutRec = {tag : int; data : Data; free_vars : TyV[]; free_vars_by_key : Map<string, TyV[]>}
 type MethodRec = {tag : int; free_vars : L<Tag,Ty>[]; range : Ty; body : TypedBind[]}
 type ClosureRec = {tag : int; free_vars : L<Tag,Ty>[]; domain_args : TyV[]; range : Ty; body : TypedBind[]}
@@ -109,7 +109,7 @@ let codegen (env : PartEvalResult) (x : TypedBind []) =
 
     let union show =
         let dict = Dictionary(HashIdentity.Reference)
-        let f (a : Map<string,Ty>) : UnionRec = {free_vars=a |> Map.map (fun _ -> env.ty_to_data >> data_free_vars); tag=dict.Count}
+        let f (a : Map<int * string,Ty>) : UnionRec = {free_vars=a |> Map.map (fun _ -> env.ty_to_data >> data_free_vars); tag=dict.Count}
         fun x ->
             let mutable dirty = false
             let r = Utils.memoize dict (fun x -> dirty <- true; f x) x

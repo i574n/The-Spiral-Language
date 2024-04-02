@@ -88,7 +88,7 @@ let cupy_ty x =
         | _ -> er()
     | _ -> er()
 
-type UnionRec = {tag : int; free_vars : Map<string, TyV[]>}
+type UnionRec = {tag : int; free_vars : Map<int * string, TyV[]>}
 type LayoutRec = {tag : int; data : Data; free_vars : TyV[]; free_vars_by_key : Map<string, TyV[]>}
 type MethodRec = {tag : int; free_vars : L<Tag,Ty>[]; range : Ty; body : TypedBind[]}
 type ClosureRec = {tag : int; free_vars : L<Tag,Ty>[]; domain : Ty; domain_args : TyV[]; range : Ty; body : TypedBind[]}

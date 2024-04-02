@@ -161,7 +161,7 @@ type BindsReturn =
 let term_vars_to_tys x = x |> Array.map (function WV(L(_,t)) -> t | WLit x -> YPrim (lit_to_primitive_type x))
 let binds_last_data x = x |> Array.last |> function TyLocalReturnData(x,_) | TyLocalReturnOp(_,_,x) -> x | TyLet _ -> raise_codegen_error "Compiler error: Cannot find the return data of the last bind."
 
-type UnionRec = {tag : int; free_vars : Map<string, TyV[]>}
+type UnionRec = {tag : int; free_vars : Map<int * string, TyV[]>}
 type LayoutRec = {tag : int; data : Data; free_vars : TyV[]; free_vars_by_key : Map<string, TyV[]>}
 type MethodRec = {tag : int; free_vars : L<Tag,Ty>[]; range : Ty; body : TypedBind[]; name : string option}
 type ClosureRec = {tag : int; free_vars : L<Tag,Ty>[]; domain : Ty; domain_args : TyV[]; range : Ty; body : TypedBind[]}
@@ -826,7 +826,7 @@ let codegen' (backend_type : CBackendType) (env : PartEvalResult) (x : TypedBind
                 line s_typ "union {"
                 let _ =
                     let s_typ = indent s_typ
-                    map_iteri (fun tag k v -> 
+                    map_iteri (fun tag (_, k) v -> 
                         if Array.isEmpty v = false then
                             line s_typ "struct {"
                             print_ordered_args (indent s_typ) v
@@ -870,7 +870,7 @@ let codegen' (backend_type : CBackendType) (env : PartEvalResult) (x : TypedBind
                 line s_fwd (sprintf "void UHDecref%i(UH%i * x);" i i)
                 print_decref s_fun $"UHDecref{i}" $"UH{i}" $"UHDecrefBody{i}"
             
-            map_iteri (fun tag k v -> 
+            map_iteri (fun tag (_, k) v -> 
                 let args = v |> Array.map (fun (L(i,t)) -> $"{tyv t} v{i}") |> String.concat ", "
                 if is_stack then
                     line s_fun (sprintf "US%i US%i_%i(%s) { // %s" i i tag args k)

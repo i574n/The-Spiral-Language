@@ -71,7 +71,7 @@ and Data =
 and TyV = L<Tag,Ty>
 // Unions always go through a join point which enables them to be compared via ref eqaulity.
 // tags and tag_cases are straightforward mapping from cases for the sake of efficiency.
-and Union = {|cases : Map<string, Ty>; layout : UnionLayout; tags : Dictionary<string, int>; tag_cases : (string * Ty) []; is_degenerate : bool|} H
+and Union = {|cases : Map<int * string, Ty>; layout : UnionLayout; tags : Dictionary<string, int>; tag_cases : (string * Ty) []; is_degenerate : bool|} H
 
 type TermVar =
     | WV of TyV
@@ -318,7 +318,7 @@ let show_ty x =
         | YTypeFunction _ -> p 0 (sprintf "? => ?")
         | YExists -> p 0 (sprintf "exists ?. ?")
         | YRecord l -> sprintf "{%s}" (l |> Map.toList |> List.map (fun (k,v) -> sprintf "%s : %s" k (f -1 v)) |> String.concat "; ")
-        | YUnion l -> sprintf "{%s}" (l.Item.cases |> Map.toList |> List.map (fun (k,v) -> sprintf "%s : %s" k (f -1 v)) |> String.concat " | ")
+        | YUnion l -> sprintf "{%s}" (l.Item.cases |> Map.toList |> List.map (fun ((_,k),v) -> sprintf "%s : %s" k (f -1 v)) |> String.concat " | ")
         | YPrim x -> show_primt x
         | YArray a -> p 30 (sprintf "array_base %s" (f 30 a))
         | YFun(a,b) -> p 20 (sprintf "%s -> %s" (f 20 a) (f 19 b))
@@ -678,10 +678,9 @@ let peval (env : TopEnv) (x : E) =
             let tag_cases = Array.zeroCreate (Map.count a)
             let mutable is_degenerate = true
             let cases =
-                Map.map (fun k v ->
+                Map.map (fun (i, k) v ->
                     let v = ty s v
                     is_degenerate <- is_degenerate && match v with YB -> true | _ -> false
-                    let i = tags.Count
                     tags.[k] <- i
                     tag_cases.[i] <- (k,v)
                     v
@@ -890,7 +889,7 @@ let peval (env : TopEnv) (x : E) =
                 match a with
                 | DPair(DSymbol k, v) ->
                     let v_ty = data_to_ty s v
-                    match Map.tryFind k h.Item.cases with
+                    match Map.tryPick (fun (_, name') v -> if k = name' then Some v else None) h.Item.cases with
                     | Some v_ty' when v_ty = v_ty' -> DNominal(DUnion(a,h),b)
                     | Some v_ty' -> raise_type_error s <| sprintf "For key %s, The type of the value does not match the union case.\nGot: %s\nExpected: %s" k (show_ty v_ty) (show_ty v_ty')
                     | None -> raise_type_error s <| sprintf "The union does not have key %s.\nGot: %s" k (show_ty b)
@@ -1101,7 +1100,7 @@ let peval (env : TopEnv) (x : E) =
             | DNominal(DUnion(DPair(DSymbol k',a),_),_) -> if k = k' then run s a else term s on_fail
             | DNominal(DV(L(_,YUnion h) & i),_) ->
                 let body blk =
-                    match Map.tryFind k h.Item.cases with
+                    match Map.tryPick (fun (_, name') v -> if k = name' then Some v else None) h.Item.cases with
                     | Some v when Set.contains k blk = false ->
                         let on_succ, ret_ty =
                             let a = ty_to_data s v
@@ -1133,7 +1132,7 @@ let peval (env : TopEnv) (x : E) =
             | DNominal(DV(L(_,YUnion h) & i) & a,_) ->
                 let body blk =
                     let cases, case_ty =
-                        Map.fold (fun (m, case_ty) k v ->
+                        Map.fold (fun (m, case_ty) (_, k) v ->
                             if Set.contains k blk = false then
                                 let a = ty_to_data s v
                                 let s = {s with unions = Map.add i (UnionData (k,a)) s.unions; cse = Dictionary(HashIdentity.Structural) :: s.cse; seq = ResizeArray()}
@@ -1185,7 +1184,7 @@ let peval (env : TopEnv) (x : E) =
                 raise_type_error s <| sprintf "The two variables have different union types.\nGot: %s\nGot: %s" (show_ty (YUnion h)) (show_ty (YUnion h'))
             | DNominal(DV(L(_,YUnion h) & i),_), DNominal(DUnion(a',_),_) ->
                 let k,a' = key_value a'
-                let v = h.Item.cases.[k]
+                let v = h.Item.cases |> Map.pick (fun (_, name') v -> if k = name' then Some v else None)
                 let case_on_succ =
                     let s = s'()
                     let a = ty_to_data s v
@@ -1194,7 +1193,7 @@ let peval (env : TopEnv) (x : E) =
                 push_typedop_no_rewrite s (TyUnionUnbox([i],h,Map.add k case_on_succ Map.empty,Some (case_on_fail()))) (Option.get case_ty)
             | DNominal(DUnion(a,_),_), DNominal(DV(L(_,YUnion h) & i'),_) ->
                 let k,a = key_value a
-                let v = h.Item.cases.[k]
+                let v = h.Item.cases |> Map.pick (fun (_, name') v -> if k = name' then Some v else None)
                 let case_on_succ =
                     let s = s'()
                     let a' = ty_to_data s v
@@ -1205,7 +1204,7 @@ let peval (env : TopEnv) (x : E) =
                 raise_type_error s <| sprintf "The two variables have different union types.\nGot: %s\nGot: %s" (show_ty t) (show_ty t')
             | DNominal(DV(L(_,YUnion h) & i),_), DNominal(DV(L(_,YUnion _) & i'),_) ->
                 let cases_on_succ =
-                    Map.map (fun k v ->
+                    Map.map (fun (_, k) v ->
                         let s = s'()
                         let a,a' = ty_to_data s v, ty_to_data s v
                         let s = {s with unions =
@@ -1215,6 +1214,8 @@ let peval (env : TopEnv) (x : E) =
                                             }
                         [a;a'], run s (on_succ, DPair(DSymbol k, DPair(a, a')))
                         ) h.Item.cases
+                    |> Seq.map (fun (KeyValue ((_, k), v)) -> k, v)
+                    |> Map.ofSeq
                 push_typedop_no_rewrite s (TyUnionUnbox([i;i'],h,cases_on_succ,Some (case_on_fail()))) (Option.get case_ty)
             | a,a' -> raise_type_error s <| sprintf "Expected two union types.\nGot: %s\nAnd: %s" (show_data a) (show_data a')
         | EOp(r,UnionUntag,[EType(_,t);a;on_succ;on_fail]) ->
@@ -1567,7 +1568,7 @@ let peval (env : TopEnv) (x : E) =
                 | None -> apply s (term s on_fail, DB)
             | _, k -> raise_type_error s <| sprintf "Expected a symbol.\nGot: %s" (show_data k)
         | EOp(_,UnionToRecord,[EType(_,a);on_succ]) ->
-            type_apply s (term s on_succ) (YRecord (ty_union s a).Item.cases)
+            type_apply s (term s on_succ) (YRecord ((ty_union s a).Item.cases |> Seq.map (fun (KeyValue ((_, k), v)) -> k, v) |> Map.ofSeq))
         | EOp(_,Add,[a;b]) ->
             let inline op a b = a + b
             match term2 s a b with

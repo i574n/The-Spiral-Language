@@ -53,7 +53,7 @@ and T =
     | TyFun of T * T
     | TyArray of T
     | TyNominal of GlobalId
-    | TyUnion of Map<string,T> * BlockParsing.UnionLayout
+    | TyUnion of Map<int * string,T> * BlockParsing.UnionLayout
     | TyApply of T * T * TT // Regular type functions (TyInl) get reduced, while this represents the staged reduction of nominals.
     | TyInl of Var * T
     | TyForall of Var * T
@@ -152,7 +152,8 @@ let rec metavars = function
     | RawTMetaVar(_,a) -> Set.singleton a
     | RawTArray(_,a) | RawTLayout(_,a,_) | RawTForall(_,_,a) -> metavars a
     | RawTPair(_,a,b) | RawTApply(_,a,b) | RawTFun(_,a,b) -> metavars a + metavars b
-    | RawTUnion(_,l,_) | RawTRecord(_,l) -> Map.fold (fun s _ v -> s + metavars v) Set.empty l
+    | RawTUnion(_,l,_) -> Map.fold (fun s _ v -> s + metavars v) Set.empty l
+    | RawTRecord(_,l) -> Map.fold (fun s _ v -> s + metavars v) Set.empty l
 
 type TopEnv = {
     nominals_next_tag : int
@@ -326,7 +327,8 @@ let validate_bound_vars (top_env : Env) constraints term ty x =
         | RawTVar(a,b) -> check_ty ty (a,b)
         | RawTArray(_,a) | RawTLayout(_,a,_) -> ctype constraints term ty a
         | RawTPair(_,a,b) | RawTApply(_,a,b) | RawTFun(_,a,b) -> ctype constraints term ty a; ctype constraints term ty b
-        | RawTUnion(_,l,_) | RawTRecord(_,l) -> Map.iter (fun _ -> ctype constraints term ty) l
+        | RawTUnion(_,l,_) -> Map.iter (fun _ -> ctype constraints term ty) l
+        | RawTRecord(_,l) -> Map.iter (fun _ -> ctype constraints term ty) l
         | RawTForall(_,((_,(a,_)),l),b) -> List.iter (check_cons constraints) l; ctype constraints term (Set.add a ty) b
         | RawTExists(_,a,b) -> 
             let ty =
@@ -444,7 +446,8 @@ let rec has_metavars x =
     | TyVar _ | TyNominal _ | TyB | TyLit _ | TyPrim _ | TySymbol _ | TyModule _ -> false
     | TyExists(_,a) | TyComment(_,a) | TyLayout(a,_) | TyForall(_,a) | TyInl(_,a) | TyArray a -> f a
     | TyApply(a,b,_) | TyFun(a,b) | TyPair(a,b) -> f a || f b
-    | TyUnion(l,_) | TyRecord l -> Map.exists (fun _ -> f) l
+    | TyUnion(l,_) -> Map.exists (fun _ -> f) l
+    | TyRecord l -> Map.exists (fun _ -> f) l
     | TyMacro a -> List.exists (function TMVar x -> has_metavars x | _ -> false) a
 
 let p prec prec' x = if prec < prec' then x else sprintf "(%s)" x
@@ -516,7 +519,7 @@ let show_t (env : TopEnv) x =
                 |> String.concat "\n"
             else "module"
         | TyRecord l -> sprintf "{%s}" (l |> Map.toList |> List.map (fun (k,v) -> sprintf "%s : %s" k (f -1 v)) |> String.concat "; ")
-        | TyUnion(l,_) -> sprintf "{%s}" (l |> Map.toList |> List.map (fun (k,v) -> sprintf "%s : %s" k (f -1 v)) |> String.concat "| ")
+        | TyUnion(l,_) -> sprintf "{%s}" (l |> Map.toList |> List.map (fun ((_,k),v) -> sprintf "%s : %s" k (f -1 v)) |> String.concat "| ")
         | TyMacro a -> p 30 (List.map (function TMLitVar a | TMVar a -> f -1 a | TMText a -> a) a |> String.concat "")
         | TyLayout(a,b) -> p 30 (sprintf "%s %s" (show_layout_type b) (f 30 a))
 
@@ -811,7 +814,8 @@ let infer package_id module_id (top_env' : TopEnv) expr =
                 else Set.remove v.name a
             | TyModule _ | TyMetavar _ | TyNominal _ | TyB | TyLit _ | TyPrim _ | TySymbol _ -> Set.empty
             | TyPair(a,b) | TyApply(a,b,_) | TyFun(a,b) -> f a + f b
-            | TyUnion(a,_) | TyRecord a -> Map.fold (fun s _ x -> Set.union s (f x)) Set.empty a
+            | TyUnion(a,_) -> Map.fold (fun s _ x -> Set.union s (f x)) Set.empty a
+            | TyRecord a -> Map.fold (fun s _ x -> Set.union s (f x)) Set.empty a
             | TyComment(_,a) | TyLayout(a,_) | TyInl(_,a) | TyArray a -> f a
             | TyMacro a -> 
                 List.fold (fun s x ->
@@ -840,7 +844,8 @@ let infer package_id module_id (top_env' : TopEnv) expr =
             | TyVar v -> if scope = v.scope && h.Add(v) then generalized_metavars.Add(v)
             | TyMetavar _ | TyNominal _ | TyB | TyLit _ | TyPrim _ | TySymbol _ -> ()
             | TyPair(a,b) | TyApply(a,b,_) | TyFun(a,b) -> f a; f b
-            | TyUnion(a,_) | TyRecord a -> Map.iter (fun _ -> f) a
+            | TyUnion(a,_) -> Map.iter (fun _ -> f) a
+            | TyRecord a -> Map.iter (fun _ -> f) a
             | TyExists(_,a) | TyComment(_,a) | TyLayout(a,_) | TyForall(_,a) | TyInl(_,a) | TyArray a -> f a
             | TyMacro a -> List.iter (function TMLitVar a | TMVar a -> f a | TMText _ -> ()) a
             | TyModule _ -> ()
@@ -908,7 +913,8 @@ let infer package_id module_id (top_env' : TopEnv) expr =
             | TyMacro a -> a |> List.iter (function TMText _ -> () | TMLitVar a | TMVar a -> f a)
             | TyExists(_,a) | TyComment(_,a) | TyForall(_,a) | TyInl(_,a) | TyArray a -> f a
             | TyApply(a,b,_) | TyFun(a,b) | TyPair(a,b) -> f a; f b
-            | TyUnion(l,_) | TyRecord l -> Map.iter (fun _ -> f) l
+            | TyUnion(l,_) -> Map.iter (fun _ -> f) l
+            | TyRecord l -> Map.iter (fun _ -> f) l
             | TyVar b -> if i.scope < b.scope then raise (TypeErrorException [r,TypeVarScopeError(b.name,got,expected)])
             | TyMetavar(x,_) -> if i = x then er() elif i.scope < x.scope then x.scope <- i.scope
             | TyLayout(a,_) -> f a
@@ -1478,7 +1484,7 @@ let infer package_id module_id (top_env' : TopEnv) expr =
                         hover_types.Add(r,(s,""))
                         let x,m = ho_make i n.vars
                         unify r s x
-                        match Map.tryFind name cases with
+                        match Map.tryPick (fun (_, name') v -> if name = name' then Some v else None) cases with
                         | Some v -> f (subst m v) a
                         | None -> errors.Add(r,CasePatternNotFoundForType(i,name)); f (fresh_var scope) a
                     | _ -> errors.Add(r,NominalInPatternUnbox i); f (fresh_var scope) a
@@ -1525,7 +1531,7 @@ let infer package_id module_id (top_env' : TopEnv) expr =
             let x = match body with TyB -> t | _ -> TyFun(body,t)
             List.foldBack (fun var ty -> TyForall(var,ty)) vars x
         match v with
-        | TyUnion(l,_) -> Map.fold (fun s name v -> Map.add name (constructor v) s) Map.empty l
+        | TyUnion(l,_) -> Map.fold (fun s (_, name) v -> Map.add name (constructor v) s) Map.empty l
         | _ -> Map.add name (constructor v) Map.empty
 
     let psucc = Hopac.Job.thunk >> Hopac.Hopac.memo

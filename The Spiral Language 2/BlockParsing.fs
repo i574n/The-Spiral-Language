@@ -318,7 +318,7 @@ and RawTExpr =
     | RawTPrim of VSCRange * PrimitiveType
     | RawTTerm of VSCRange * RawExpr
     | RawTMacro of VSCRange * RawMacro list
-    | RawTUnion of VSCRange * Map<string,RawTExpr> * UnionLayout
+    | RawTUnion of VSCRange * Map<int * string,RawTExpr> * UnionLayout
     | RawTLayout of VSCRange * RawTExpr * Layout
     | RawTFilledNominal of VSCRange * GlobalId // Filled in by the inferencer.
 
@@ -930,7 +930,8 @@ let typecase_validate x _ =
         | RawTVar(r,a) -> if metavars.Contains(a) then errors.Add(r,VarShadowedByMetavar) else vars.Add(a) |> ignore
         | RawTApply(_,a,b) | RawTFun(_,a,b) | RawTPair(_,a,b) -> f a; f b
         | RawTLayout(_,a,_) | RawTArray(_,a) -> f a
-        | RawTUnion(_,a,_) | RawTRecord(_,a) -> Map.iter (fun _ -> f) a
+        | RawTUnion(_,a,_) -> Map.iter (fun _ -> f) a
+        | RawTRecord(_,a) -> Map.iter (fun _ -> f) a
         | RawTMacro(_,a) -> a |> List.iter (function RawMacroTypeVar(_,a) -> f a | _ -> ())
     f x
     if 0 < errors.Count then Error (Seq.toList errors) else Ok(x)
@@ -1035,7 +1036,7 @@ and root_type_union (flags : RootTypeFlags) d =
     >>= fun (r,x) _ ->
         x |> List.map fst |> duplicates DuplicateUnionKey
         |> function 
-            | [] -> Ok(r,x |> List.map (fun ((r,n),x) -> n, match x with Some x -> x | None -> RawTB r) |> Map.ofList)
+            | [] -> Ok(r,x |> List.mapi (fun i ((r,n),x) -> (i,n), match x with Some x -> x | None -> RawTB r) |> Map.ofList)
             | er -> Error er
         ) d
 and root_type (flags : RootTypeFlags) d =
