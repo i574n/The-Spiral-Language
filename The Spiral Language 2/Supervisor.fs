@@ -220,7 +220,7 @@ type BuildResult =
 
 open Polyglot
 open Polyglot.Common
-open Lib.File_system.Operators
+open Lib.SpiralFileSystem.Operators
 open Microsoft.AspNetCore.SignalR.Client
 
 let dll_path = Reflection.Assembly.GetExecutingAssembly().Location |> System.IO.Path.GetDirectoryName

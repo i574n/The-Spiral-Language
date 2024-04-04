@@ -465,7 +465,7 @@ type PartEvalResult = {
     nominal_apply : Ty -> Ty
     }
 
-open Lib.File_system.Operators
+open Lib.SpiralFileSystem.Operators
 let dll_path = Reflection.Assembly.GetExecutingAssembly().Location |> System.IO.Path.GetDirectoryName
 let supervisor_dir = dll_path </> "supervisor"
 let trace_dir = supervisor_dir </> "trace"
