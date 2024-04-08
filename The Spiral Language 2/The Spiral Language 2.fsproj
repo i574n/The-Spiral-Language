@@ -38,6 +38,12 @@
     <Compile Include="../../../lib/fsharp/AsyncSeq.fs" />
     <Compile Include="../../../lib/fsharp/Runtime.fs" />
     <Compile Include="../../../lib/fsharp/FileSystem.fs" />
+    <Compile Include="../../../lib/fsharp/Networking.fs" />
+    <Compile Include="../../../lib/fsharp/Threading.fs" />
+    <Compile Include="../../../lib/fsharp/Crypto.fs" />
+    <Compile Include="../../../apps/builder/Builder.fs" />
+    <Compile Include="../../../apps/spiral/Supervisor.fs" />
+    <Compile Include="../../../apps/spiral/Eval.fs" />
 
     <None Include="Script1.fsx" />
     <Compile Include="PersistentVectorExtensions.fs" />

@@ -223,11 +223,13 @@ open Polyglot.Common
 open Lib.SpiralFileSystem.Operators
 open Microsoft.AspNetCore.SignalR.Client
 
-let dll_path = Reflection.Assembly.GetExecutingAssembly().Location |> System.IO.Path.GetDirectoryName
-let supervisor_dir = dll_path </> "supervisor"
-let trace_dir = supervisor_dir </> "trace"
-let commands_dir = supervisor_dir </> "commands"
-let old_dir = supervisor_dir </> "old"
+// let dll_path = Reflection.Assembly.GetExecutingAssembly().Location |> System.IO.Path.GetDirectoryName
+// let supervisor_dir = dll_path </> "supervisor"
+let repositoryRoot =
+    Lib.SpiralFileSystem.get_source_directory ()
+    |> Lib.SpiralFileSystem.find_parent ".paket" false
+let targetDir = repositoryRoot </> "target/polyglot/spiral_eval"
+let traceDir = targetDir </> "supervisor_trace"
 let dir uri = FileInfo(Uri(uri).LocalPath).Directory.FullName
 let file uri = FileInfo(Uri(uri).LocalPath).FullName
 let supervisor_server (default_env : Startup.DefaultEnv) atten (errors : SupervisorErrorSources) req =
@@ -402,8 +404,8 @@ let supervisor_server (default_env : Startup.DefaultEnv) atten (errors : Supervi
                             | :? CodegenUtils.CodegenError as e -> BuildFatalError(e.Data1)
                             | :? CodegenUtils.CodegenErrorWithPos as e -> BuildErrorTrace(show_trace s e.Data0 e.Data1)
                             | ex ->
-                                if Directory.Exists trace_dir then
-                                    let trace_file = trace_dir </> $"{DateTimeOffset.Now:yyyy_MM_dd_HH_mm_ss_fff}_error.json"
+                                if Directory.Exists traceDir then
+                                    let trace_file = traceDir </> $"{DateTimeOffset.Now:yyyy_MM_dd_HH_mm_ss_fff}_error.json"
                                     async {
                                         try
                                             do! $"{ex}" |> FileSystem.writeAllTextAsync trace_file
@@ -499,12 +501,12 @@ type SpiralHub(supervisor : Supervisor) =
 
         let client_req = Json.deserialize x
 
-        if Directory.Exists trace_dir then
+        if Directory.Exists traceDir then
             match client_req with
             | Ping _ -> ()
             | _ ->
                 let req_name = client_req.GetType().Name
-                let trace_file = trace_dir </> $"{DateTimeOffset.Now:yyyy_MM_dd_HH_mm_ss_fff}_{req_name}.json"
+                let trace_file = traceDir </> $"{DateTimeOffset.Now:yyyy_MM_dd_HH_mm_ss_fff}_{req_name}.json"
                 async {
                     do! Async.Sleep 500
                     try
@@ -554,7 +556,9 @@ let [<EntryPoint>] main args =
 
     printfn "Server bound to: %s" uri_server
     printfn $"pwd: {System.Environment.CurrentDirectory}"
-    printfn $"dll_path: {dll_path}"
+    let dllPath = Reflection.Assembly.GetExecutingAssembly().Location |> System.IO.Path.GetDirectoryName
+    printfn $"dllPath: {dllPath}"
+    printfn $"targetDir: {targetDir}"
     let builder = WebApplication.CreateBuilder()
     builder.Logging.SetMinimumLevel LogLevel.Warning |> ignore
     builder.Services
@@ -598,48 +602,8 @@ let [<EntryPoint>] main args =
         ) |> ignore
     app.MapHub<SpiralHub>("") |> ignore
 
-    if Directory.Exists supervisor_dir then
-        [trace_dir; commands_dir; old_dir]
-        |> List.iter (fun dir -> if Directory.Exists dir |> not then Directory.CreateDirectory dir |> ignore)
-
-        Directory.EnumerateFiles commands_dir |> Seq.iter File.Delete
-
-        let stream, _disposable =
-            commands_dir
-            |> FileSystem.watchDirectory (function
-                | FileSystem.FileSystemChange.Created _ -> true
-                | _ -> false
-            )
-
-        let connection = HubConnectionBuilder().WithUrl(uri_server).Build()
-        connection.StartAsync() |> Async.AwaitTask |> Async.Start
-        // let _ = connection.On<string>("ServerToClientMsg", fun x ->
-        //     printfn $"ServerToClientMsg: '{x}'"
-        // )
-
-        stream
-        |> FSharp.Control.AsyncSeq.iterAsyncParallel (fun (ticks, event) -> async {
-            let getLocals () = $"ticks: {ticks} / event: {event} / {getLocals ()}"
-            trace Verbose (fun () -> "watchDirectory / iterAsyncParallel") getLocals
-
-            match event with
-            | FileSystem.FileSystemChange.Created (path, Some json) ->
-                try
-                    let fullPath = commands_dir </> path
-                    let! result = connection.InvokeAsync<string>("ClientToServerMsg", json) |> Async.AwaitTask
-                    let oldPath = old_dir </> path
-                    do! fullPath |> FileSystem.moveFileAsync oldPath |> Async.Ignore
-                    if result |> Sm.trim |> String.length > 0 then
-                        let resultPath = old_dir </> $"{Path.GetFileNameWithoutExtension path}_result.json"
-                        do! result |> FileSystem.writeAllTextAsync resultPath
-                with ex ->
-                    trace Critical (fun () -> "watchDirectory / iterAsyncParallel / ex: {ex |> Sm.format_exception}") getLocals
-            | _ -> ()
-        })
-        |> Async.StartChild
-        |> Async.Ignore
-        |> Async.Start
-
+    use _ = Eval.startTokenRangeWatcher ()
+    use _ = Eval.startCommandsWatcher uri_server
 
     printfn $"Starting the Spiral Server. It is bound to: {uri_server}"
     app.Run()
