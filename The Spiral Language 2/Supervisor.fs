@@ -408,7 +408,7 @@ let supervisor_server (default_env : Startup.DefaultEnv) atten (errors : Supervi
                                     let trace_file = traceDir </> $"{DateTimeOffset.Now:yyyy_MM_dd_HH_mm_ss_fff}_error.json"
                                     async {
                                         try
-                                            do! $"{ex}" |> FileSystem.writeAllTextAsync trace_file
+                                            do! $"{ex}" |> Lib.SpiralFileSystem.write_all_text_async trace_file
                                         with ex ->
                                             trace Critical (fun () -> $"file_build / ex: {ex |> Sm.format_exception}") getLocals
                                     }
@@ -510,7 +510,7 @@ type SpiralHub(supervisor : Supervisor) =
                 async {
                     do! Async.Sleep 500
                     try
-                        do! x |> FileSystem.writeAllTextAsync trace_file
+                        do! x |> Lib.SpiralFileSystem.write_all_text_async trace_file
                     with ex ->
                         trace Critical (fun () -> $"ClientToServerMsg / ex: {ex |> Sm.format_exception}") getLocals
                 }
