@@ -3,7 +3,9 @@ open System
 open FSharpx.Collections
 
 let private range_checks from near_to vec =
-    if from <= near_to = false then raise (ArgumentException("`from` must be less or equal to `near_to`."))
+    if from <= near_to = false then
+        Polyglot.Common.trace Polyglot.Common.Critical (fun () -> $"PersistentVectorExtensions.range_checks / `from` must be less or equal to `near_to`. / from: {from} / near_to: {near_to} / vec: {vec}") Polyglot.Common.getLocals
+        // raise (ArgumentException("`from` must be less or equal to `near_to`."))
     if from < 0 then raise (ArgumentException("`from` must not be negative."))
     if PersistentVector.length vec < near_to then raise (ArgumentException("`near_to` must not be beyond the length of the vector."))
 
