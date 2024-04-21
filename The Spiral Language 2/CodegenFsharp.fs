@@ -358,12 +358,18 @@ let codegen (env : PartEvalResult) (x : TypedBind []) =
                 | DLit(LitFloat64 _) | DV(L(_,YPrim Float64T)) -> sprintf "System.Double.IsNaN(%s)" (tup x)
                 | _ -> raise_codegen_error "Compiler error: Invalid type in NanIs."
             | UnionTag, [DV(L(i,YUnion h))] -> 
+                let h = h.Item
                 let ty =
-                    let h = h.Item
                     match h.layout with
                     | UHeap -> sprintf "UH%i" (uheap h.cases).tag
                     | UStack -> sprintf "US%i" (ustack h.cases).tag
-                sprintf "(fst (Reflection.FSharpValue.GetUnionFields(v%i, typeof<%s>))).Tag" i ty // TODO: Stopgap measure for now. Replace this with something more efficient.
+                let items =
+                    h.cases
+                    |> Seq.map (fun (KeyValue ((i, _), _)) ->
+                        $"{ty}_{i}, {i}"
+                    )
+                    |> String.concat "; "
+                $"[ {items} ] |> Map |> Map.find v{i}"
             | _ -> raise_codegen_error <| sprintf "Compiler error: %A with %i args not supported" op l.Length
             |> simple
     and heap : _ -> LayoutRec = layout (fun s x ->
