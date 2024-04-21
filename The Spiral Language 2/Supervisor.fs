@@ -13,6 +13,10 @@ open Hopac.Infixes
 open Hopac.Extensions
 open Hopac.Stream
 
+open Polyglot
+open Polyglot.Common
+open Lib.SpiralFileSystem.Operators
+
 type LocalizedErrors = {|uri : string; errors : RString list|}
 type TracedError = {|trace : string list; message : string|}
 type SupervisorErrorSources = {
@@ -218,13 +222,6 @@ type BuildResult =
     | BuildFatalError of string
     | BuildSkip
 
-open Polyglot
-open Polyglot.Common
-open Lib.SpiralFileSystem.Operators
-open Microsoft.AspNetCore.SignalR.Client
-
-// let dll_path = Reflection.Assembly.GetExecutingAssembly().Location |> System.IO.Path.GetDirectoryName
-// let supervisor_dir = dll_path </> "supervisor"
 let repositoryRoot =
     Lib.SpiralFileSystem.get_source_directory ()
     |> Lib.SpiralFileSystem.find_parent ".paket" false
@@ -373,7 +370,7 @@ let supervisor_server (default_env : Startup.DefaultEnv) atten (errors : Supervi
                     printfn $"Build skipped for {file}"
                     Job.unit ()
             let file_build (s : SupervisorState) mid (tc : WDiff.ProjStateTC, prepass : WDiffPrepass.ProjStatePrepass) =
-                printfn $"Building {file}"
+                trace Debug (fun () -> $"Building {file}") getLocals
                 let a,b = tc.files.uids_file.[mid]
                 let x,_ = prepass.files.uids_file.[mid]
                 Hopac.start (a.state >>= fun (has_error',_) ->
@@ -405,15 +402,16 @@ let supervisor_server (default_env : Startup.DefaultEnv) atten (errors : Supervi
                             | :? CodegenUtils.CodegenErrorWithPos as e -> BuildErrorTrace(show_trace s e.Data0 e.Data1)
                             | ex ->
                                 if Directory.Exists traceDir then
-                                    let trace_file = traceDir </> $"{DateTimeOffset.Now:yyyy_MM_dd_HH_mm_ss_fff}_error.json"
+                                    let guid = DateTime.Now |> Lib.SpiralDateTime.new_guid_from_date_time
+                                    let trace_file = traceDir </> $"{guid}_error.json"
                                     async {
                                         try
                                             do! $"{ex}" |> Lib.SpiralFileSystem.write_all_text_async trace_file
                                         with ex ->
-                                            trace Critical (fun () -> $"file_build / ex: {ex |> Sm.format_exception}") getLocals
+                                            trace Critical (fun () -> $"Supervisor.supervisor_server.BuildFile.file_build / ex: {ex |> Sm.format_exception}") getLocals
                                     }
                                     |> Async.Start
-                                trace Critical (fun () -> $"file_build / ex: {ex |> Sm.format_exception}") getLocals
+                                trace Critical (fun () -> $"Supervisor.supervisor_server.BuildFile.file_build / ex: {ex |> Sm.format_exception}") getLocals
                                 BuildFatalError(ex.Message)
                     | None ->
                         // BuildFatalError $"Cannot find `main` in file {Path.GetFileNameWithoutExtension file}."
@@ -506,13 +504,15 @@ type SpiralHub(supervisor : Supervisor) =
             | Ping _ -> ()
             | _ ->
                 let req_name = client_req.GetType().Name
-                let trace_file = traceDir </> $"{DateTimeOffset.Now:yyyy_MM_dd_HH_mm_ss_fff}_{req_name}.json"
+                let guid = DateTime.Now |> Lib.SpiralDateTime.new_guid_from_date_time
+                let trace_file = traceDir </> $"{guid}_{req_name}.json"
+                
                 async {
                     do! Async.Sleep 500
                     try
                         do! x |> Lib.SpiralFileSystem.write_all_text_async trace_file
                     with ex ->
-                        trace Critical (fun () -> $"ClientToServerMsg / ex: {ex |> Sm.format_exception}") getLocals
+                        trace Critical (fun () -> $"SpiralHub.ClientToServerMsg / ex: {ex |> Sm.format_exception}") getLocals
                 }
                 |> Async.Start
 
@@ -531,7 +531,7 @@ type SpiralHub(supervisor : Supervisor) =
         | Ping _ -> task { return null }
         | Exit _ ->
             async {
-                printfn "Exiting..."
+                trace Debug (fun () -> "Exiting...") getLocals
                 async {
                     do! Async.Sleep 1000
                     System.Environment.Exit 0
@@ -548,6 +548,7 @@ open Microsoft.Extensions.DependencyInjection
 open Microsoft.Extensions.Logging
 
 let [<EntryPoint>] main args =
+    Lib.SpiralTrace.TraceLevel.US0_1 |> Lib.set_trace_level
     Scheduler.Global.setCreate { Scheduler.Create.Def with MaxStackSize = 1024 * 8192 |> Some }
 
     let env = Startup.parse args
@@ -555,10 +556,10 @@ let [<EntryPoint>] main args =
     let uri_server = $"http://localhost:{env.port}"
 
     printfn "Server bound to: %s" uri_server
-    printfn $"pwd: {System.Environment.CurrentDirectory}"
+    trace Debug (fun () -> $"pwd: {Environment.CurrentDirectory}") getLocals
     let dllPath = Reflection.Assembly.GetExecutingAssembly().Location |> System.IO.Path.GetDirectoryName
-    printfn $"dllPath: {dllPath}"
-    printfn $"targetDir: {targetDir}"
+    trace Debug (fun () -> $"dllPath: {dllPath}") getLocals
+    trace Debug (fun () -> $"targetDir: {targetDir}") getLocals
     let builder = WebApplication.CreateBuilder()
     builder.Logging.SetMinimumLevel LogLevel.Warning |> ignore
     builder.Services
