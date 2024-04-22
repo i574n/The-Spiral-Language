@@ -353,9 +353,21 @@ let supervisor_server (default_env : Startup.DefaultEnv) atten (errors : Supervi
             Hopac.start (IVar.fill res {|result=error|})
             s
         | FileTokenRange(x, res) ->
-            match Map.tryFind (file x.uri) s.modules with
-            | Some v -> Hopac.start (BlockBundling.semantic_tokens v.parser >>= (Tokenize.vscode_tokens x.range >> IVar.fill res))
-            | None -> Hopac.start (IVar.fill res [||])
+            let rec tryFetch retry = async {
+                if retry > 3
+                then Hopac.start (IVar.fill res [||])
+                else
+                    match Map.tryFind (file x.uri) s.modules with
+                    | Some v ->
+                        Hopac.start (BlockBundling.semantic_tokens v.parser >>= (Tokenize.vscode_tokens x.range >> IVar.fill res))
+                    | None ->
+                        trace Debug
+                            (fun () -> $"Supervisor.supervisor_server.FileTokenRange")
+                            (fun () -> $"file: None / retry: {retry} / {_locals ()}")
+                        do! Async.Sleep 60
+                        return! tryFetch (retry + 1)
+            }
+            tryFetch 1 |> Async.RunSynchronously
             s
         | HoverAt(x,res) ->
             let file = file x.uri
@@ -400,6 +412,8 @@ let supervisor_server (default_env : Startup.DefaultEnv) atten (errors : Supervi
         | BuildFile x ->
             let backend = x.backend
             let file = file x.uri
+            let _locals () = $"file: {file}"
+            trace Debug (fun () -> $"Supervisor.supervisor_server.BuildFile") _locals
             let handle_build_result = function
                 | BuildOk l ->
                     Job.fromUnitTask (fun () -> task {
@@ -409,10 +423,9 @@ let supervisor_server (default_env : Startup.DefaultEnv) atten (errors : Supervi
                 | BuildFatalError x -> Ch.send errors.fatal x
                 | BuildErrorTrace(a,b) -> Ch.send errors.traced {|trace=a; message=b|}
                 | BuildSkip ->
-                    printfn $"Build skipped for {file}"
+                    trace Debug (fun () -> $"Supervisor.supervisor_server.BuildFile.handle_build_result.BuildSkip") _locals
                     Job.unit ()
             let file_build (s : SupervisorState) mid (tc : WDiff.ProjStateTC, prepass : WDiffPrepass.ProjStatePrepass) =
-                trace Debug (fun () -> $"Building {file}") _locals
                 trace Verbose (fun () -> $"""Supervisor.supervisor_server.BuildFile.file_build / modules: %A{s.modules.Keys |> Lib.SpiralSm.concat ", "} / packages: %A{s.packages.Keys |> Lib.SpiralSm.concat ", "} / package_ids: %A{s.package_ids |> fst |> fun x -> x.Keys |> Lib.SpiralSm.concat ", "}""") _locals
                 let a,b = tc.files.uids_file.[mid]
                 let x,_ = prepass.files.uids_file.[mid]
