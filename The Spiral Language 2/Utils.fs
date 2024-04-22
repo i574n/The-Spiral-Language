@@ -2,6 +2,7 @@
 
 open System.Collections.Generic
 open System.Runtime.CompilerServices
+open Polyglot.Common
 
 let list_try_zip a b = try Some (List.zip a b) with _ -> None
 
@@ -21,7 +22,10 @@ let lines (str : string) = str.Split([|"\r\n";"\r";"\n"|],System.StringSplitOpti
 let inline remove (dict : Dictionary<_,_>) x on_succ on_fail =
     let mutable q = Unchecked.defaultof<_>
     if dict.Remove(x, &q) then on_succ q else on_fail ()
-let file_uri (x : string) = if x.StartsWith '/' then "file://" + x else "file:///" + x
+let file_uri (x : string) =
+    let result = x |> Lib.SpiralFileSystem.normalize_path |> Lib.SpiralFileSystem.new_file_uri
+    trace Verbose (fun () -> $"Utils.file_uri / x: {x} / result: {result}") _locals
+    result
 
 //open Hopac
 //open Hopac.Infixes
