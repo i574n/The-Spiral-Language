@@ -354,7 +354,7 @@ let supervisor_server (default_env : Startup.DefaultEnv) atten (errors : Supervi
             s
         | FileTokenRange(x, res) ->
             let rec tryFetch retry = async {
-                if retry > 3
+                if retry > 10
                 then Hopac.start (IVar.fill res [||])
                 else
                     match Map.tryFind (file x.uri) s.modules with
