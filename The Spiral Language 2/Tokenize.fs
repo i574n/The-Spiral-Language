@@ -232,6 +232,8 @@ let comment (s : Tokenizer) =
     if peek s = '/' && peek' s 1 = '/' then 
         let from = s.from
         inc' 2 s
+        while peek s = '/' || (peek s = '!' && peek' s 1 = ' ') do
+            inc s
         if skip ' ' s then
             let com = s.text.[s.from..]
             s.from <- s.text.Length

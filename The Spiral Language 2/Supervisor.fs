@@ -353,21 +353,14 @@ let supervisor_server (default_env : Startup.DefaultEnv) atten (errors : Supervi
             Hopac.start (IVar.fill res {|result=error|})
             s
         | FileTokenRange(x, res) ->
-            let rec tryFetch retry = async {
-                if retry > 10
-                then Hopac.start (IVar.fill res [||])
-                else
-                    match Map.tryFind (file x.uri) s.modules with
-                    | Some v ->
-                        Hopac.start (BlockBundling.semantic_tokens v.parser >>= (Tokenize.vscode_tokens x.range >> IVar.fill res))
-                    | None ->
-                        trace Debug
-                            (fun () -> $"Supervisor.supervisor_server.FileTokenRange")
-                            (fun () -> $"file: None / retry: {retry} / {_locals ()}")
-                        do! Async.Sleep 60
-                        return! tryFetch (retry + 1)
-            }
-            tryFetch 1 |> Async.RunSynchronously
+            match Map.tryFind (file x.uri) s.modules with
+            | Some v ->
+                Hopac.start (BlockBundling.semantic_tokens v.parser >>= (Tokenize.vscode_tokens x.range >> IVar.fill res))
+            | None ->
+                trace Debug
+                    (fun () -> $"Supervisor.supervisor_server.FileTokenRange")
+                    (fun () -> $"module=None / x.uri: {x.uri} / {_locals ()}")
+                Hopac.start (IVar.fill res [||])
             s
         | HoverAt(x,res) ->
             let file = file x.uri
