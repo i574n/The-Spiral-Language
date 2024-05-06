@@ -11,6 +11,8 @@ open System
 open System.Text
 open System.Collections.Generic
 
+let private backend_name = "Cuda"
+
 let is_string = function DV(L(_,YPrim StringT)) | DLit(LitString _) -> true | _ -> false
 // The number of bits needed to represent an union type with an x number of cases.
 // Strictly speaking it should be x * 2 - 1, but we do it like this to give 1 bit of extra wiggle room for the 2,4,8,16 (pow of 2) cases
@@ -165,7 +167,7 @@ let codegen (globals : _ ResizeArray, fwd_dcls : _ ResizeArray, types : _ Resize
                             line s $"{m};"
                             false
                         else
-                            let q = m.Split("v$")
+                            let q = m.Split("\\v")
                             if q.Length = 1 then 
                                 decl_vars |> line' s
                                 return_local s d m 
@@ -178,7 +180,7 @@ let codegen (globals : _ ResizeArray, fwd_dcls : _ ResizeArray, types : _ Resize
                                     w.Append(q.[d.Length]).Append(';').ToString() |> line s
                                     true
                                 else
-                                    raise_codegen_error "The special v$ macro requires the same number of free vars in its binding as there are v$ in the code."
+                                    raise_codegen_error "The special \\v macro requires the same number of free vars in its binding as there are \\v in the code."
                     | TyArrayLiteral(a,b') -> 
                         let inits = List.map tup_data b' |> String.concat "," |> sprintf "{%s}"
                         match d with
@@ -233,6 +235,10 @@ let codegen (globals : _ ResizeArray, fwd_dcls : _ ResizeArray, types : _ Resize
             | UHeap -> sprintf "UH%i *" (uheap a).tag
         | YLayout(a,Heap) -> raise_codegen_error "Heap layout types aren't supported in the Cuda C++ backend due to them needing to be heap allocated."
         | YLayout(a,HeapMutable) -> raise_codegen_error "Heap mutable layout types aren't supported in the Cuda C++ backend due to them needing to be heap allocated."
+        | YMacro [Text "backend_switch "; Type (YRecord r)] ->
+            match Map.tryFind backend_name r with
+            | Some x -> tup_ty x
+            | None -> raise_codegen_error $"In the backend_switch, expected a record with the '{backend_name}' field."
         | YMacro a -> a |> List.map (function Text a -> a | Type a -> tup_ty a | TypeLit a -> type_lit a) |> String.concat ""
         | YPrim a -> prim a
         | YArray a -> sprintf "%s *" (tup_ty a)
@@ -244,7 +250,7 @@ let codegen (globals : _ ResizeArray, fwd_dcls : _ ResizeArray, types : _ Resize
         | Int16T -> "short"
         | Int32T -> "long"
         | Int64T -> "long long"
-        | UInt8T -> "unsigned"
+        | UInt8T -> "unsigned char"
         | UInt16T -> "unsigned short"
         | UInt32T -> "unsigned long"
         | UInt64T -> "unsigned long long"
@@ -311,10 +317,9 @@ let codegen (globals : _ ResizeArray, fwd_dcls : _ ResizeArray, types : _ Resize
         | TyJoinPoint(a,args) -> return' (jp (a, args))
         | TyBackend(_,_,(r,_)) -> raise_codegen_error_backend r "The C backend does not support nesting of other backends."
         | TyBackendSwitch m ->
-            let backend = "Cuda"
-            match Map.tryFind backend m with
+            match Map.tryFind backend_name m with
             | Some b -> binds s ret b
-            | None -> raise_codegen_error $"Cannot find the backend \"{backend}\" in the TyBackendSwitch."
+            | None -> raise_codegen_error $"Cannot find the backend \"{backend_name}\" in the TyBackendSwitch."
         | TyWhile(a,b) ->
             let cond =
                 match a with
@@ -392,7 +397,11 @@ let codegen (globals : _ ResizeArray, fwd_dcls : _ ResizeArray, types : _ Resize
         | TyLayoutHeapMutableSet(L(i,t),b,c) -> raise_codegen_error "Cannot set a value into a layout type in the Cuda C++ backend due to them needing to be heap allocated."
         | TyArrayLiteral(a,b') -> raise_codegen_error "Compiler error: TyArrayLiteral should have been taken care of in TyLet."
         | TyArrayCreate(a,b) ->  raise_codegen_error "Compiler error: TyArrayCreate should have been taken care of in TyLet."
-        | TyFailwith(a,b) -> raise_codegen_error "Failwith is not supported in the Cuda C++ backend."
+        | TyFailwith(a,b) ->
+            let string_in_op = function DLit (LitString b) -> lit_string b | b -> raise_codegen_error "In the Cuda backend, the exception string must be a literal."
+            let fmt = @"%s\n"
+            line s $"printf(\"{fmt}\", {string_in_op b});"
+            line s "asm(\"exit;\");" // TODO: Print out the error traces as well.
         | TyConv(a,b) -> return' $"({tyv a}){tup_data b}"
         | TyApply(L(i,_),b) -> 
             let rec loop = function
@@ -553,8 +562,8 @@ let codegen (globals : _ ResizeArray, fwd_dcls : _ ResizeArray, types : _ Resize
 
                 // Tag
                 let num_bits = num_bits_needed_to_represent x.free_vars.Count
-                if num_bits > 8 then raise_codegen_error "Too many union cases! Cannot have a union case type with more than 8 bits."
-                line s_typ $"char tag : {num_bits};"
+                if num_bits > 32 then raise_codegen_error "Too many union cases! Cannot have a union case type with more than 2^32 - 1 possible tags."
+                line s_typ $"unsigned long tag : {num_bits};"
             line s_typ "};"
 
             map_iteri (fun tag (_, k) v -> 

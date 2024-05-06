@@ -30,11 +30,11 @@ let peek (s : Tokenizer) = peek' s 0
 
 let inline many1Satisfy2L init body label (s : Tokenizer) = 
     let x = peek s
-    if init x then
+    if init x && x <> eol then
         inc s
         let rec loop (b : StringBuilder) = 
             let x = peek s
-            if body x then inc s; b.Append(x) |> loop
+            if body x && x <> eol then inc s; b.Append(x) |> loop
             else b.ToString()
         Ok(loop (StringBuilder().Append(x)))
     else
@@ -57,6 +57,14 @@ let skip_char c (s : Tokenizer) =
 let skip_string x (s : Tokenizer) =
     if String.Compare(s.text,s.from,x,0,x.Length) = 0 then inc' x.Length s; Ok()
     else error_char s.from x
+
+let anyOf (l : char list) (s : Tokenizer) =
+    let c = peek s
+    if Seq.contains c l then 
+        inc s; Ok(c)
+    else
+        let i = s.from
+        Error (List.map (fun c -> range_char i, string c) l)
 
 let chars_till_string close (s : Tokenizer) =
     assert (close <> "")

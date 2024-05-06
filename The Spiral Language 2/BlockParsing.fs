@@ -1,4 +1,4 @@
-﻿module Spiral.BlockParsing
+module Spiral.BlockParsing
 
 open System
 
@@ -14,6 +14,13 @@ type NominalString = string
 type Layout = Heap | HeapMutable
 
 type Op =
+    // Compile time hash set
+    | HashSetCreate
+    | HashSetAdd
+    | HashSetContains
+    | HashSetRemove
+    | HashSetCount
+
     // Pragma
     | PragmaUnrollPush
     | PragmaUnrollPop
@@ -50,7 +57,8 @@ type Op =
     | Dyn
 
     // Nominal 
-    | NominalCreate // Also creates the union
+    | NominalCreate // In addition to regular nominals, it can also creates unions
+    | NominalStrip
 
     // Union
     | Unbox
@@ -134,6 +142,7 @@ type Op =
     | LayoutIs
     | NominalIs
     | FunctionIs
+    | ExistsIs
     | PrototypeHas
 
     // Static Type Is
@@ -142,8 +151,8 @@ type Op =
     | UnionTypeIs
     | HeapUnionTypeIs
     | LayoutTypeIs
+    | ExistsTypeIs
     | NominalTypeIs
-    
 
     // Panic
     | FailWith
@@ -152,7 +161,7 @@ type Op =
     | PrintStatic
     | PrintRaw
     | ErrorType
-    | NominalStrip
+    | ExistsStrip
     | StringLitToSymbol
     | SymbolToString
     
@@ -179,7 +188,8 @@ type ParserErrors =
     | ExpectedStringOpen | ExpectedStringClose
     | ExpectedMacroOpen | ExpectedMacroClose
     | ExpectedMacroVar | ExpectedMacroTypeVar | ExpectedMacroTypeLitVar 
-    | ExpectedText | ExpectedEscapedChar | ExpectedUnescapedChar
+    | ExpectedEscapedChar of is_term_macro : bool
+    | ExpectedText | ExpectedUnescapedChar
     | ExpectedOperator'
     | ExpectedOperator of string
     | ExpectedUnaryOperator'
@@ -195,6 +205,7 @@ type ParserErrors =
     | SymbolPairedShouldStartWithUppercaseInTypeScope
     | ExpectedSymbol
     | ExpectedParenthesis of Parenthesis * ParenthesisState
+    | ExpectedMacroExpression of MacroEnum * ParenthesisState
     | ExpectedOpenParenthesis
     | ExpectedStatement
     | ExpectedEob
@@ -239,9 +250,9 @@ type HoVar = VSCRange * (VarString * RawKindExpr)
 type TypeVar = HoVar * (VSCRange * VarString) list
 type RawMacro =
     | RawMacroText of VSCRange * string
-    | RawMacroTermVar of VSCRange * RawExpr
-    | RawMacroTypeVar of VSCRange * RawTExpr
-    | RawMacroTypeLitVar of VSCRange * RawTExpr
+    | RawMacroTerm of VSCRange * RawExpr
+    | RawMacroType of VSCRange * RawTExpr
+    | RawMacroTypeLit of VSCRange * RawTExpr
 and RawRecordWith =
     | RawRecordWithSymbol of (VSCRange * SymbolString) * RawExpr
     | RawRecordWithSymbolModify of (VSCRange * SymbolString) * RawExpr
@@ -454,7 +465,7 @@ let skip_macro_close d =
         | p,TokMacroClose -> skip d; Ok(p)
         | p, _ -> Error [p, ExpectedMacroClose]
 
-let read_text d =
+let read_text is_term_macro d =
     let (+.) a b =
         match a with
         | Some a -> Some (a +. b)
@@ -462,23 +473,24 @@ let read_text d =
     let rec loop (a : VSCRange option) (str : Text.StringBuilder) =
         try_current d <| function
             | b,TokText x -> skip d; loop (a +. b) (str.Append(x))
+            | b,TokEscapedVar when is_term_macro -> skip d; loop (a +. b) (str.Append("\\v"))
             | b,(TokEscapedChar x | TokUnescapedChar x) -> skip d; loop (a +. b) (str.Append(x))
             | b, _ -> 
-                if Option.isNone a then Error [b, ExpectedText; b, ExpectedEscapedChar; b, ExpectedUnescapedChar]
+                if Option.isNone a then Error [b, ExpectedText; b, ExpectedEscapedChar is_term_macro; b, ExpectedUnescapedChar]
                 else Ok(Option.get a, str.ToString())
     loop None (Text.StringBuilder())
 
 let read_macro_var d =
     try_current d <| function
-        | p, TokMacroTermVar x -> skip d; Ok(RawMacroTermVar(p,RawV(p,x)))
-        | p, TokMacroTypeVar x -> skip d; Ok(RawMacroTypeVar(p,RawTVar(p,x)))
-        | p, TokMacroTypeLitVar x -> skip d; Ok(RawMacroTypeLitVar(p,RawTVar(p,x)))
+        | p, TokMacroTermVar x -> skip d; Ok(RawMacroTerm(p,RawV(p,x)))
+        | p, TokMacroTypeVar x -> skip d; Ok(RawMacroType(p,RawTVar(p,x)))
+        | p, TokMacroTypeLitVar x -> skip d; Ok(RawMacroTypeLit(p,RawTVar(p,x)))
         | p,_ -> Error [p, ExpectedMacroVar]
-
+    
 let read_macro_type_var d =
     try_current d <| function
-        | p, TokMacroTypeVar x -> skip d; Ok(RawMacroTypeVar(p,RawTVar(p,x)))
-        | p, TokMacroTypeLitVar x -> skip d; Ok(RawMacroTypeLitVar(p,RawTVar(p,x)))
+        | p, TokMacroTypeVar x -> skip d; Ok(RawMacroType(p,RawTVar(p,x)))
+        | p, TokMacroTypeLitVar x -> skip d; Ok(RawMacroTypeLit(p,RawTVar(p,x)))
         | p,_ -> Error [p, ExpectedMacroTypeVar]
 
 let skip_keyword t d =
@@ -613,7 +625,13 @@ let skip_parenthesis a b d =
         | p, TokParenthesis(a',b') when a = a' && b = b' -> skip d; Ok()
         | p, _ -> Error [p, ExpectedParenthesis(a,b)]
 
+let skip_macro_expression a b d =
+    try_current d <| function
+        | p, TokMacroExpression(a',b') when a = a' && b = b' -> skip d; Ok()
+        | p, _ -> Error [p, ExpectedMacroExpression(a,b)]
+
 let on_succ x _ = Ok x
+let macro_expression ty a d = (skip_macro_expression ty Open >>. a .>> skip_macro_expression ty Close) d
 let rounds a d = (skip_parenthesis Round Open >>. a .>> skip_parenthesis Round Close) d
 let curlies a d = (skip_parenthesis Curly Open >>. a .>> skip_parenthesis Curly Close) d
 let squares a d = (skip_parenthesis Square Open >>. a .>> skip_parenthesis Square Close) d
@@ -758,12 +776,12 @@ let forall d =
         match List.append x x' with [] -> Ok q | er -> Error er
         ) d
 let pat_exists d = 
-    (skip_keyword SpecExists >>. many1 (range read_small_type_var) .>> skip_op "." 
+    (skip_keyword SpecExists >>. many (range read_small_type_var) .>> skip_op "." 
     >>= fun q _ -> 
         match duplicates DuplicateExistsVar q with [] -> Ok q | er -> Error er
         ) d
 let exists d = 
-    (skip_keyword SpecExists >>. many1 forall_var .>> skip_op "." 
+    (skip_keyword SpecExists >>. many forall_var .>> skip_op "." 
     >>= fun q _ -> 
         let x' = q |> List.collect (fun (_,l) -> duplicates DuplicateConstraint l)
         let x = q |> List.map (fun ((r,(a,_)),_) -> r,a) |> duplicates DuplicateExistsVar
@@ -932,7 +950,7 @@ let typecase_validate x _ =
         | RawTLayout(_,a,_) | RawTArray(_,a) -> f a
         | RawTUnion(_,a,_) -> Map.iter (fun _ -> f) a
         | RawTRecord(_,a) -> Map.iter (fun _ -> f) a
-        | RawTMacro(_,a) -> a |> List.iter (function RawMacroTypeVar(_,a) -> f a | _ -> ())
+        | RawTMacro(_,a) -> a |> List.iter (function RawMacroType(_,a) -> f a | _ -> ())
     f x
     if 0 < errors.Count then Error (Seq.toList errors) else Ok(x)
 
@@ -953,7 +971,7 @@ let inline read_default_value on_top on_bot d =
         if d.is_top_down then Ok(on_top (p,t'))
         else bottom_up_number d.default_env (p,t') |> Result.map on_bot
         ) d
-let read_string = tuple3 skip_string_open ((read_text |>> snd) <|>% "") skip_string_close
+let read_string = tuple3 skip_string_open ((read_text false |>> snd) <|>% "") skip_string_close
 let pat_var d = (read_small_var' |>> PatVar) d
 let pat_list_pair r a b = PatUnbox(r,"Cons",PatPair(r,a,b))
 let rec root_pattern_var_nominal_union s =
@@ -1056,7 +1074,12 @@ and root_type (flags : RootTypeFlags) d =
         let rounds =
             range (rounds ((next |>> fun x _ -> x) <|>% RawTB))
             |>> fun (r,x) -> x r
-        let macro = pipe3 skip_macro_open (many ((read_text |>> RawMacroText) <|> read_macro_type_var)) skip_macro_close (fun a l b -> RawTMacro(a +. b, l))
+        let macro = 
+            let read_macro_expression s = 
+                (macro_expression MType (root_type root_type_defaults |>> fun x -> RawMacroType(range_of_texpr x,x))
+                <|> macro_expression MTypeLit (root_type root_type_defaults |>> fun x -> RawMacroTypeLit(range_of_texpr x,x))) s
+            let body = many ((read_text false |>> RawMacroText) <|> read_macro_type_var <|> read_macro_expression)
+            pipe3 skip_macro_open body skip_macro_close (fun a l b -> RawTMacro(a +. b, l))
         let exists = range (exists .>>. root_type {flags with allow_wildcard=false}) |>> fun (r,(l,b)) -> RawTExists(r,l,b)
         let (+) = alt (index d)
         (rounds + lit + lit_default + wildcard + term + metavar + var + record + symbol + macro + exists) d
@@ -1185,7 +1208,14 @@ and root_term d =
                 Error [r, ListLiteralsNotAllowedInBottomUp]
 
         let case_string = read_string |>> fun (a, x, b) -> RawLit(a +. b,LitString x)
-        let case_macro = pipe3 skip_macro_open (many ((read_text |>> RawMacroText) <|> read_macro_var)) skip_macro_close (fun a l b -> RawMacro(a +. b, l))
+
+        let case_macro =
+            let read_macro_expression s = 
+                (macro_expression MTerm (root_term |>> fun x -> RawMacroTerm(range_of_expr x,x))
+                <|> macro_expression MType (root_type root_type_defaults |>> fun x -> RawMacroType(range_of_texpr x,x))
+                <|> macro_expression MTypeLit (root_type root_type_defaults |>> fun x -> RawMacroTypeLit(range_of_texpr x,x))) s
+            let body = many ((read_text true |>> RawMacroText) <|> read_macro_var <|> read_macro_expression)
+            pipe3 skip_macro_open body skip_macro_close (fun a l b -> RawMacro(a +. b, l))
 
         let (+) = alt (index d)
 
@@ -1398,7 +1428,8 @@ let show_parser_error = function
     | MetavarShadowedByVar -> "The metavariable is shadowed by a variable."
     | VarShadowedByMetavar -> "The variable is shadowed by a metavariable."
     | ExpectedPairedSymbolInUnion -> "The union clause should be pair whose left side is a symbol."
-    | ExpectedEscapedChar -> "escaped character"
+    | ExpectedEscapedChar false -> "escaped character"
+    | ExpectedEscapedChar true -> "escaped character or the escaped variable (\\v)"
     | ExpectedUnescapedChar -> "unescaped character"
     | ExpectedMacroVar -> "variable"
     | ExpectedMacroTypeVar -> "type variable"
@@ -1446,6 +1477,12 @@ let show_parser_error = function
     | ExpectedParenthesis(Round,Close) -> ")"
     | ExpectedParenthesis(Curly,Close) -> "}"
     | ExpectedParenthesis(Square,Close) -> "]"
+    | ExpectedMacroExpression(MTerm,Open) -> "`("
+    | ExpectedMacroExpression(MType,Open) -> "!("
+    | ExpectedMacroExpression(MTypeLit,Open) -> "@("
+    | ExpectedMacroExpression(MTerm,Close) -> ")"
+    | ExpectedMacroExpression(MType,Close) -> ")"
+    | ExpectedMacroExpression(MTypeLit,Close) -> ")"
     | ExpectedOpenParenthesis -> "(, { or ["
     | ExpectedOperator' -> "operator"
     | ExpectedOperator x -> x

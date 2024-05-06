@@ -1,0 +1,22 @@
+Error trace on line: 205, column: 9 in module: d:\Users\Marko\Source\Repos\The Spiral Language\Spiral Compilation Tests\cuda_experiments\ml2\corebase\pickler.spi.
+inl main() =
+        ^
+Error trace on line: 206, column: 5 in module: d:\Users\Marko\Source\Repos\The Spiral Language\Spiral Compilation Tests\cuda_experiments\ml2\corebase\pickler.spi.
+    inl p_card = alt {
+    ^
+Error trace on line: 211, column: 5 in module: d:\Users\Marko\Source\Repos\The Spiral Language\Spiral Compilation Tests\cuda_experiments\ml2\corebase\pickler.spi.
+    inl p_action = alt {
+    ^
+Error trace on line: 216, column: 5 in module: d:\Users\Marko\Source\Repos\The Spiral Language\Spiral Compilation Tests\cuda_experiments\ml2\corebase\pickler.spi.
+    inl p : pu game_state = 
+    ^
+Error trace on line: 222, column: 5 in module: d:\Users\Marko\Source\Repos\The Spiral Language\Spiral Compilation Tests\cuda_experiments\ml2\corebase\pickler.spi.
+    serialize p {stack=5; pot=8; card=King; action_history=open tensorm in ;[Raise; Raise; Call]}
+    ^
+Error trace on line: 222, column: 17 in module: d:\Users\Marko\Source\Repos\The Spiral Language\Spiral Compilation Tests\cuda_experiments\ml2\corebase\pickler.spi.
+    serialize p {stack=5; pot=8; card=King; action_history=open tensorm in ;[Raise; Raise; Call]}
+                ^
+Error trace on line: 222, column: 76 in module: d:\Users\Marko\Source\Repos\The Spiral Language\Spiral Compilation Tests\cuda_experiments\ml2\corebase\pickler.spi.
+    serialize p {stack=5; pot=8; card=King; action_history=open tensorm in ;[Raise; Raise; Call]}
+                                                                           ^
+Only stack allocated primitive types (i8,i16,i32,i64 and u8,u16,u32,u64 and f32,f64 and bool) are allowed in CuPy arrays.

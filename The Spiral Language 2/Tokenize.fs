@@ -41,6 +41,7 @@ type TokenKeyword =
 
 type ParenthesisState = Open | Close
 type Parenthesis = Round | Square | Curly
+type MacroEnum = MTerm | MType | MTypeLit
 
 type Literal = 
     | LitUInt8 of uint8
@@ -71,6 +72,7 @@ type SemanticTokenLegend =
     | escaped_char = 10
     | unescaped_char = 11
     | number_suffix = 12
+    | escaped_var = 13
 
 type SpiralToken =
     | TokVar of string * SemanticTokenLegend
@@ -86,11 +88,13 @@ type SpiralToken =
     | TokStringOpen | TokStringClose
     | TokText of string
     | TokEscapedChar of char
+    | TokEscapedVar
     | TokUnescapedChar of char
     | TokMacroOpen | TokMacroClose
     | TokMacroTermVar of string
     | TokMacroTypeVar of string
     | TokMacroTypeLitVar of string
+    | TokMacroExpression of MacroEnum * ParenthesisState
 
 let token_groups = function
     | TokUnaryOperator(_,r) | TokOperator(_,r) | TokVar(_,r) | TokSymbol(_,r) -> r
@@ -101,7 +105,9 @@ let token_groups = function
     | TokMacroTypeVar _ -> SemanticTokenLegend.type_variable
     | TokMacroTypeLitVar _ -> SemanticTokenLegend.type_variable
     | TokMacroTermVar _ -> SemanticTokenLegend.variable
+    | TokMacroExpression _ -> SemanticTokenLegend.parenthesis
     | TokEscapedChar _ -> SemanticTokenLegend.escaped_char
+    | TokEscapedVar -> SemanticTokenLegend.escaped_var
     | TokUnescapedChar _ -> SemanticTokenLegend.unescaped_char
     | TokValue _ | TokDefaultValue _ -> SemanticTokenLegend.number
     | TokValueSuffix -> SemanticTokenLegend.number_suffix
@@ -304,45 +310,19 @@ let string_quoted' s =
     | _ -> error_char s.from "\""
 let string_quoted s = (string_quoted' .>> spaces) s
 
-type MacroEnum =
-    | MTerm
-    | MType
-    | MTypeLit
+type private Macro =
+    | Text of Range * string
+    | EscapedChar of Range * char
+    | EscapedVar of Range
+    | UnescapedChar of Range * char
+    | Expression of Range * string * MacroEnum
+    | Var of Range * string * MacroEnum
 
-let macro' s =
-    let inline f from x = {from=from; nearTo=s.from}, x
-    let close l = let f = f s.from in inc s; List.rev (f TokMacroClose :: l) |> Ok
-    let rec text close_char l =
-        let f = f s.from
-        let rec loop (str : StringBuilder) =
-            let l () = if 0 < str.Length then f (TokText(str.ToString())) :: l else l
-            let var b = 
-                let c = 
-                    match b with
-                    | MTerm -> '!'
-                    | MType -> '`'
-                    | MTypeLit -> '@'
-                    
-                if peek' s 1 = c then inc' 2 s; loop (str.Append(c))
-                else var close_char b (l ())
-            match peek s with
-            | x when x = eol -> error_char s.from "character or \""
-            | '`' -> var MType 
-            | '!' -> var MTerm
-            | '@' -> var MTypeLit
-            | '\\' -> special_char (l ()) (text close_char) s
-            | x when x = close_char -> close (l ())
-            | x -> inc s; loop (str.Append(x))
-        loop (StringBuilder())
-    and var close_char is_type l =
-        let f = f s.from
-        let text x _ = text close_char (f (match is_type with MType -> TokMacroTypeVar x | MTerm -> TokMacroTermVar x | MTypeLit -> TokMacroTypeLitVar x) :: l)
-        inc s; (many1Satisfy2L is_var_char_starting is_var_char "variable" >>= text) s
-    match peek s, peek' s 1 with
-    | '$', '"' -> let f = f s.from in inc' 2 s; text '"' [f TokMacroOpen]
-    | '$', ''' -> let f = f s.from in inc' 2 s; text ''' [f TokMacroOpen]
-    | _ -> error_char s.from "$\""
-let macro s = (macro' .>> spaces) s
+let inline range p s = 
+    let from = s.from
+    match p s with
+    | Ok x -> Ok({from=from; nearTo=s.from}, x)
+    | Error l -> Error l
 
 let brackets s =
     let from = s.from
@@ -355,18 +335,100 @@ let brackets s =
 let tab s = if peek s = '\t' then Error [range_char (index s), "Tabs are not allowed."] else Error []
 let eol s = if peek s = eol then Ok [] else Error [range_char (index s), "end of line"]
 
-let token s =
+let rec token s =
     let i = s.from
     let inline (+) a b = alt i a b
-    (string_quoted + macro + number + ((var + symbol + string_raw + char_quoted + brackets + comment + operator) |>> fun x -> [x])) s
+    let individual_tokens = string_quoted + number + ((var + symbol + string_raw + char_quoted + brackets + comment + operator) |>> fun x -> [x]) |>> fun x -> x, []
+    (macro + individual_tokens) s
+and tokenize text =
+    let mutable ar = PersistentVector.empty
+    let mutable er = []
+    let tokens =
+        many_iter (fun (x : (Range * SpiralToken) list,er' : (Range * string) list) ->
+            List.iter (fun x -> ar <- PersistentVector.conj x ar) x
+            er <- List.append er' er
+            ) token
+    let er = match (spaces >>. tokens .>> (eol <|> tab)) {from=0; text=text} with Ok() -> er | Error er' -> List.append er' er
+    ar, er
+and macro s =
+    let char_to_macro_expr = function
+        | '`' -> MType
+        | '!' -> MTerm
+        | '@' -> MTypeLit
+        | _ -> failwith "Compiler error: Unknown char in the tokenizer."
+
+    let p_special_char s =
+        match peek' s 0, peek' s 1 with
+        | '\\', ('n' | 'r' | 't' | 'b' as c) -> 
+            let r = {from=s.from; nearTo=s.from+2}
+            inc' 2 s
+            Ok(EscapedChar(r, c))
+        | '\\', ('v' as c) -> 
+            let r = {from=s.from; nearTo=s.from+2}
+            inc' 2 s
+            Ok(EscapedVar(r))
+        | '\\', c ->
+            let r = {from=s.from; nearTo=s.from+2}
+            inc' 2 s 
+            Ok(UnescapedChar(r, c))
+        | _ -> error_char s.from "\\"
+
+    let p_var s = (many1Satisfy2L is_var_char_starting is_var_char "variable") s
+    let p_text closing_char s = (range (many1SatisfyL (fun c -> c <> closing_char && c <> '`' && c <> '!' && c <> '@' && c <> '\\') "macro text") |>> Text) s
+    let p_expr s = 
+        let start = anyOf ['`'; '!'; '@']
+        let case_paren start_char = 
+            between (skip_char '(') (skip_char ')') (many1SatisfyL ((<>) ')') "not )") 
+            |>> fun (body) range -> Expression(range,body,char_to_macro_expr start_char)
+        let case_var start_char =
+            (skip_char start_char |>> fun () range -> UnescapedChar(range,start_char))
+            <|> (p_var |>> fun body range -> Var(range,body,char_to_macro_expr start_char))
+        (range (start >>= fun start_char -> (case_paren start_char <|> case_var start_char))
+        |>> fun (range, f) -> f range) s
+    let p_macro_inner closing_char s = (many (p_special_char <|> p_text closing_char <|> p_expr) <|>% []) s
+    let p_macro s =
+        let body a b = range (between (skip_string a) (skip_char b) (p_macro_inner b))
+        (body "$\"" '"' <|> body "$'" ''') s
+
+    match (p_macro .>> spaces) s with
+    | Ok(r, x) -> 
+        let start = 
+            let r = {from=r.from; nearTo=r.from+2}
+            r, TokMacroOpen
+        let end_ = 
+            let r = {from=r.nearTo-1; nearTo=r.nearTo}
+            r, TokMacroClose
+    
+        let mutable er = []
+        x |> List.collect (function
+            | Text(r,x) -> [r, TokText x]
+            | EscapedChar(r,x) -> [r, TokEscapedChar x]
+            | EscapedVar(r) -> [r, TokEscapedVar]
+            | UnescapedChar(r,x) -> [r, TokUnescapedChar x]
+            | Var(r,x,MType) -> [r, TokMacroTypeVar x]
+            | Var(r,x,MTypeLit) -> [r, TokMacroTypeLitVar x]
+            | Var(r,x,MTerm) -> [r, TokMacroTermVar x]
+            | Expression(r,x,t) -> 
+                let start = 
+                    let r = {from=r.from; nearTo=r.from+2}
+                    r, TokMacroExpression(t,Open)
+                let end_ = 
+                    let r = {from=r.nearTo-1; nearTo=r.nearTo}
+                    r, TokMacroExpression(t,Close)
+                let middle,er' =
+                    let adjust_range (r : Range,x) = {from=r.from + (fst start).nearTo; nearTo=r.nearTo + (fst start).nearTo}, x
+                    let middle,er' = tokenize x
+                    PersistentVector.map adjust_range middle,
+                    List.map adjust_range er'
+                er <- List.append er' er
+                List.concat [[start]; List.ofSeq middle; [end_]]
+            )
+        |> fun l -> Ok(List.concat [[start]; l; [end_]], er)
+    | Error er -> Error er
 
 type LineToken = Range * SpiralToken
 type LineComment = Range * string
 type LineTokenErrors = (Range * TokenizerError) list
-let tokenize text = 
-    let mutable ar = PersistentVector.empty
-    let er = match (spaces >>. many_iter (List.iter (fun x -> ar <- PersistentVector.conj x ar)) token .>> (eol <|> tab)) {from=0; text=text} with Ok() -> [] | Error er -> er
-    ar, er
 
 let vscode_tokens ((a,b) : VSCRange) (lines : LineToken PersistentVector PersistentVector) =
     let in_range x = min lines.Length x

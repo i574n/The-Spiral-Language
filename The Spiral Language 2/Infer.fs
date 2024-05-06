@@ -122,6 +122,7 @@ type TypeError =
     | ArrayIsMissingAnnotation
     | ExistsIsMissingAnnotation
     | ShadowedForall
+    | ShadowedExists
     | UnionTypesMustHaveTheSameLayout
     | OrphanInstance
     | ShadowedInstance
@@ -318,8 +319,8 @@ let validate_bound_vars (top_env : Env) constraints term ty x =
     and cmacro constraints term ty a =
         List.iter (function
             | RawMacroText _ -> ()
-            | RawMacroTermVar(r,a) -> cterm constraints (term, ty) a
-            | RawMacroTypeVar(r,a) | RawMacroTypeLitVar(r,a) -> ctype constraints term ty a
+            | RawMacroTerm(r,a) -> cterm constraints (term, ty) a
+            | RawMacroType(r,a) | RawMacroTypeLit(r,a) -> ctype constraints term ty a
             ) a
     and ctype constraints term ty x =
         match x with
@@ -554,7 +555,7 @@ let show_type_error (env : TopEnv) x =
     | ModuleIndexFailed a -> sprintf "The module does not have the key: %s" a
     | ExpectedModule a -> sprintf "Expected a module.\nGot: %s" (f a)
     | ExpectedSymbolInRecordWith a -> sprintf "Expected a symbol.\nGot: %s" (f a)
-    | RealFunctionInTopDown -> sprintf "Real segment functions are forbidden in the top-down segment."
+    | RealFunctionInTopDown -> sprintf "Real segment functions are forbidden in the top-down segment. They can only be used in `real` expressions or .spir modules."
     | MissingRecordFieldsInPattern(a,b) -> sprintf "The record is missing the following fields: %s.\nGot: %s" (String.concat ", " b) (f a)
     | CasePatternNotFoundForType(i,n) -> sprintf "%s does not have the %s case." (show_nominal env i) n
     | CasePatternNotFound n -> sprintf "Cannot find a function with the same name as the %s case in the environment." n
@@ -585,7 +586,8 @@ let show_type_error (env : TopEnv) x =
     | MacroIsMissingAnnotation -> "The macro needs an annotation."
     | ArrayIsMissingAnnotation -> "The array needs an annotation."
     | ExistsIsMissingAnnotation -> "The existential type needs an annotation."
-    | ShadowedForall -> "Shadowing of foralls (in the top-down) segment is not allowed."
+    | ShadowedForall -> "Shadowing of foralls is not allowed in the top-down segment."
+    | ShadowedExists -> "Shadowing of existential type variables is not allowed in the top-down segment."
     | UnionTypesMustHaveTheSameLayout -> "The two union types must have the same layout."
     | OrphanInstance -> "The instance has to be defined in the same package as either the prototype or the nominal."
     | ShadowedInstance -> "The instance cannot be defined twice."
@@ -674,7 +676,7 @@ let infer package_id module_id (top_env' : TopEnv) expr =
                 | TyUnion(a,b) -> RawTUnion(r,Map.map (fun _ -> f) a,b)
                 | TyApply(a,b,_) -> RawTApply(r,f a,f b)
                 | TyVar a -> RawTVar(r,a.name)
-                | TyMacro l -> l |> List.map (function TMText x -> RawMacroText(r,x) | TMVar x -> RawMacroTypeVar(r,f x) | TMLitVar x -> RawMacroTypeLitVar(r,f x)) |> fun l -> RawTMacro(r,l)
+                | TyMacro l -> l |> List.map (function TMText x -> RawMacroText(r,x) | TMVar x -> RawMacroType(r,f x) | TMLitVar x -> RawMacroTypeLit(r,f x)) |> fun l -> RawTMacro(r,l)
                 | TyLayout(a,b) -> RawTLayout(r,f a,b)
             f expr
         let annot r x = t_to_rawtexpr r (snd annotations.[x])
@@ -738,7 +740,7 @@ let infer package_id module_id (top_env' : TopEnv) expr =
             | RawSeq(r,a,b) -> RawSeq(r,f a,f b)
             | RawHeapMutableSet(r,a,b,c) -> RawHeapMutableSet(r,f a,List.map f b,f c)
             | RawMacro(r,l) ->
-                let l = l |> List.map (function RawMacroTermVar(r,x) -> RawMacroTermVar(r,f x) | x -> x )
+                let l = l |> List.map (function RawMacroTerm(r,x) -> RawMacroTerm(r,f x) | x -> x )
                 RawAnnot(r,RawMacro(r,l),annot r x)
             | RawArray(r,a) -> RawAnnot(r,RawArray(r,List.map f a),annot r x)
         and pattern rec_term x' =
@@ -1226,8 +1228,8 @@ let infer package_id module_id (top_env' : TopEnv) expr =
             annotations.Add(x,(r,s))
             List.iter (function
                 | RawMacroText _ -> ()
-                | RawMacroTermVar(_,a) -> term scope env (fresh_var scope) a
-                | RawMacroTypeVar(_,a) | RawMacroTypeLitVar(_,a) -> ty scope env (fresh_var scope) a
+                | RawMacroTerm(_,a) -> term scope env (fresh_var scope) a
+                | RawMacroType(_,a) | RawMacroTypeLit(_,a) -> ty scope env (fresh_var scope) a
                 ) a
         | RawHeapMutableSet(r,a,b,c) ->
             unify r s TyB
@@ -1393,8 +1395,8 @@ let infer package_id module_id (top_env' : TopEnv) expr =
         | RawTMacro(r,a) ->
             List.map (function
                 | RawMacroText(_,a) -> TMText a
-                | RawMacroTermVar _ -> failwith "Compiler error: Term vars should never appear at the type level."
-                | RawMacroTypeVar(r,a) | RawMacroTypeLitVar(r,a) -> let v = fresh_var scope in f v a; TMVar v
+                | RawMacroTerm _ -> failwith "Compiler error: Term vars should never appear at the type level."
+                | RawMacroType(r,a) | RawMacroTypeLit(r,a) -> let v = fresh_var scope in f v a; TMVar v
                 ) a
             |> TyMacro |> unify r s
         | RawTLayout(r,a,b) ->
@@ -1469,6 +1471,7 @@ let infer package_id module_id (top_env' : TopEnv) expr =
                     unify r s (l |> Map |> TyRecord)
                     env
             | PatExists(r,l,p) ->
+                l |> List.iter (fun (r,name) -> if Map.containsKey name env.ty then errors.Add(r,ShadowedExists))
                 match visit_t s with
                 | TyExists(type_vars,type_body) ->
                     let scope = scope + 1
@@ -1764,6 +1767,7 @@ let base_types (default_env : Startup.DefaultEnv) =
     "heap", inl (fun x -> TyLayout(TyVar x,Layout.Heap))
     "mut", inl (fun x -> TyLayout(TyVar x,Layout.HeapMutable))
     "int", TyPrim default_env.default_int
+    "uint", TyPrim default_env.default_uint
     "float", TyPrim default_env.default_float
     ]
 

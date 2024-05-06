@@ -59,7 +59,7 @@
 						"u64"
 					],
 					"default": "i32",
-					"description": "What the type level and bottom-up integer literals without specified suffixes get parsed as. Also determines the type of `int` at the start of the program. Changes to this property require a language server restart."
+					"description": "What the type level and bottom-up integer literals without specified suffixes get parsed as. Also determines the type of `int` at the start of the program. Based on this type, an equivalent unsigned integer `uint` is automatically derived. If the default int is unsigned then `int` and `uint` are the same. Changes to this property require a language server restart."
 				},
 				"spiral.default_float": {
 					"type": "string",
@@ -138,6 +138,11 @@
 				"id": "number_suffix",
 				"superType": "keyword",
 				"description": "The suffix for a number."
+			},
+			{
+				"id": "escaped_var",
+				"superType": "keyword",
+				"description": "The escaped variable in a term macro."
 			}
 		]
 	},
