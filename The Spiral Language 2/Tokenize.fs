@@ -402,7 +402,9 @@ and macro s =
         let mutable er = []
         x |> List.collect (function
             | Text(r,x) -> [r, TokText x]
-            | EscapedChar(r,x) -> [r, TokEscapedChar x]
+            | EscapedChar(r,x) ->
+                let x = match x with 'n' -> '\n' | 'r' -> '\r' | 't' -> '\t' | 'b' -> '\b' | x -> x
+                [r, TokEscapedChar x]
             | EscapedVar(r) -> [r, TokEscapedVar]
             | UnescapedChar(r,x) -> [r, TokUnescapedChar x]
             | Var(r,x,MType) -> [r, TokMacroTypeVar x]
