@@ -315,11 +315,7 @@ let codegen (globals : _ ResizeArray, fwd_dcls : _ ResizeArray, types : _ Resize
             binds (indent s) ret fl
             line s "}"
         | TyJoinPoint(a,args) -> return' (jp (a, args))
-        | TyBackend(_,_,(r,_)) -> raise_codegen_error_backend r "The C backend does not support nesting of other backends."
-        | TyBackendSwitch m ->
-            match Map.tryFind backend_name m with
-            | Some b -> binds s ret b
-            | None -> raise_codegen_error $"Cannot find the backend \"{backend_name}\" in the TyBackendSwitch."
+        | TyBackend(_,_,r) -> raise_codegen_error_backend r "The Cuda backend does not support nesting of other backends."
         | TyWhile(a,b) ->
             let cond =
                 match a with
@@ -357,13 +353,9 @@ let codegen (globals : _ ResizeArray, fwd_dcls : _ ResizeArray, types : _ Resize
             |> sprintf "switch (%s) {" |> line s
             let _ =
                 let s = indent s
-                let _,on_succs = Map.foldBack (fun k v (is_last, m) -> false, Map.add k (is_last,v) m) on_succs (on_fail.IsNone, Map.empty)
-                Map.iter (fun k (is_last,(a,b)) ->
+                Map.iter (fun k (a,b) ->
                     let union_i = case_tags.[k]
-
-                    if is_last then line s $"default: {{ // {k}"
-                    else line s $"case {union_i}: {{ // {k}"
-
+                    line s (sprintf "case %i: { // %s" union_i k)
                     List.iter2 (fun (L(data_i,_)) a ->
                         let a, s = data_free_vars a, indent s
                         let qs = ResizeArray(a.Length)
@@ -373,14 +365,18 @@ let codegen (globals : _ ResizeArray, fwd_dcls : _ ResizeArray, types : _ Resize
                         line' s qs
                         ) is a
                     binds (indent s) ret b
-                    if not is_last then line (indent s) "break;"
+                    line (indent s) "break;"
                     line s "}"
                     ) on_succs
-                on_fail |> Option.iter (fun b ->
-                    line s "default: {"
-                    binds (indent s) ret b
-                    line s "}"
-                    )
+                line s "default: {"
+                let _ =
+                    let s = indent s
+                    match on_fail with
+                    | Some b ->
+                        binds s ret b
+                    | None ->
+                        line s "assert(\"Invalid tag.\" && false);"
+                line s "}"
             line s "}"
         | TyUnionBox(a,b,c') ->
             let c = c'.Item
@@ -561,9 +557,10 @@ let codegen (globals : _ ResizeArray, fwd_dcls : _ ResizeArray, types : _ Resize
                 line s_typ "} v;"
 
                 // Tag
-                let num_bits = num_bits_needed_to_represent x.free_vars.Count
-                if num_bits > 32 then raise_codegen_error "Too many union cases! Cannot have a union case type with more than 2^32 - 1 possible tags."
-                line s_typ $"unsigned long tag : {num_bits};"
+                //let num_bits = num_bits_needed_to_represent x.free_vars.Count
+                //if num_bits > 32 then raise_codegen_error "Too many union cases! Cannot have a union case type with more than 2^32 - 1 possible tags."
+                if x.free_vars.Count >= 255 then raise_codegen_error "Too many union cases. They should not be more than 255."
+                line s_typ $"unsigned char tag;"
             line s_typ "};"
 
             map_iteri (fun tag (_, k) v -> 
@@ -581,7 +578,8 @@ let codegen (globals : _ ResizeArray, fwd_dcls : _ ResizeArray, types : _ Resize
             )
     and uheap _ : UnionRec = raise_codegen_error "Recursive unions aren't allowed in the Cuda C++ backend due to them needing to be heap allocated."
 
-    global' "template <typename el, int dim> struct array { el v[dim]; };"
+    global' "template <typename el, int dim> struct static_array { el v[dim]; };"
+    global' "template <typename el, int dim, typename default_int> struct static_array_list { el v[dim]; default_int length; };"
 
     fun vs (x : TypedBind []) ->
         match binds_last_data x |> data_term_vars |> term_vars_to_tys with

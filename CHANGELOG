@@ -1,3 +1,43 @@
+2.10.8 (5/28/2024)
+
+* Speed up compilation of union types on the Cuda backend by 20% by replacing the union tag bitfield with an u8 type.
+
+2.10.7 (5/19/2024)
+
+* Inserted the printing of static array classes during codegen for both the Python and the Cuda backends.
+* CuPy arrays have proper boolean types instead of treating them as uint8 now.
+
+2.10.6 (5/17/2024)
+
+* Extended the SizeOf op in the partial evaluator so it supports booleans.
+
+2.10.5 (5/17/2024)
+
+* Fixed the ref counting related bug leading to unbound vars being deleted in the Python codegen.
+
+2.10.4 (5/15/2024)
+
+* Fixed the handling of closure variables in the Python codegen.
+
+2.10.3 (5/10/2024)
+
+* Added the NominalTypeApply op into the language.
+
+2.10.2 (5/9/2024)
+
+* Restricted the use of BackendSwitch to the real segment.
+
+2.10.1 (5/9/2024)
+
+* Improved the tokenizer so it parses nested parens in macro expressions.
+
+2.10.0 (5/8/2024)
+
+Fundamental changes to how join points work. 
+
+* The backend switch now requires an annotation, which will break all the old examples, but the fix for that is easy.
+* The backend switch is now inlined, and is no longer evaluated in the code generators. All of their functionality has been moved to the partial evaluation phase.
+
 2.9.0 (5/6/2024)
 
 Various macro related changes and bugfixes.

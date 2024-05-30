@@ -85,7 +85,7 @@ let cupy_ty x =
             | UInt64T -> "cp.uint64"
             | Float32T -> "cp.float32"
             | Float64T -> "cp.float64"
-            | BoolT -> "cp.int8"
+            | BoolT -> "cp.bool_"
             | _ -> er()
         | _ -> er()
     | _ -> er()
@@ -157,7 +157,7 @@ let codegen'' backend_handler (env : PartEvalResult) (x : TypedBind []) =
             r
 
     let cupy_ty x = env.ty_to_data x |> data_free_vars |> cupy_ty
-    let rec binds_start (args : TyV []) (s : CodegenEnv) (x : TypedBind []) = binds (Codegen.C.refc_prepass "Python" Set.empty (Set args) x).g_decr s BindsTailEnd x
+    let rec binds_start (args : TyV []) (s : CodegenEnv) (x : TypedBind []) = binds (Codegen.C.refc_prepass Set.empty (Set args) x).g_decr s BindsTailEnd x
     and binds g_decr (s : CodegenEnv) (ret : BindsReturn) (stmts : TypedBind []) = 
         let s_len = s.text.Length
         let tup_destruct (a,b) =
@@ -233,7 +233,7 @@ let codegen'' backend_handler (env : PartEvalResult) (x : TypedBind []) =
             |> return'
 
         match a with
-        | TySizeOf _ -> raise_codegen_error "`sizeof` is not supported in the Python back end."
+        | TySizeOf t -> raise_codegen_error $"The following type in `sizeof` is not supported in the Python back end.\nGot: {show_ty t}"
         | TyMacro a -> a |> List.map (function CMText x -> x | CMTerm x -> tup_data x | CMType x -> tup_ty x | CMTypeLit a -> type_lit a) |> String.concat "" |> return'
         | TyIf(cond,tr,fl) ->
             line s (sprintf "if %s:" (tup_data cond))
@@ -268,21 +268,17 @@ let codegen'' backend_handler (env : PartEvalResult) (x : TypedBind []) =
                         let x = data_free_vars a
                         let g_decr' = Utils.get_default g_decr (Array.head b) (fun () -> Set.empty)
                         let x,g_decr' = Array.mapFold (fun g_decr (L(i,_) as v) -> if Set.contains v g_decr then "_", Set.remove v g_decr else sprintf "v%i" i, g_decr) g_decr' x
-                        if Set.isEmpty g_decr' = false then g_decr.[Array.head b] <- g_decr'
+                        g_decr.[Array.head b] <- g_decr'
                         sprintf "%s_%i(%s)" prefix i (String.concat ", " x)
                         )
                     |> String.concat ", "
                 line s (sprintf "case %s: # %s" cases k)
                 binds g_decr (indent s) ret b
                 ) on_succs
-            on_fail |> Option.iter (fun b ->
-                line s "case _:"
-                binds g_decr (indent s) ret b
-                )
-        | TyBackendSwitch m ->
-            match Map.tryFind backend_name m with
-            | Some b -> binds g_decr s ret b
-            | None -> raise_codegen_error $"Cannot find the backend \"{backend_name}\" in the TyBackendSwitch."
+            line s "case t:"
+            match on_fail with
+            | Some b -> binds g_decr (indent s) ret b
+            | None -> line (indent s) "raise Exception(f'Pattern matching miss. Got: {t}')"
         | TyUnionBox(a,b,c') ->
             let c = c'.Item
             let i = c.tags.[a]
@@ -409,12 +405,18 @@ let codegen'' backend_handler (env : PartEvalResult) (x : TypedBind []) =
             | Some(domain_args, body) -> {tag=i; free_vars=rdata_free_vars args; domain=domain; domain_args=data_free_vars domain_args; range=range; body=body}
             | _ -> raise_codegen_error "Compiler error: The method dictionary is malformed"
             ) (fun s x ->
-            let closure_args = x.free_vars |> Array.map (fun (L(i,t)) -> $"v{i} : {tyv t}") |> String.concat ", "
-            line s $"def Closure{x.tag}({closure_args}):"
+            let env_args = x.free_vars |> Array.map (fun (L(i,t)) -> $"env_v{i} : {tyv t}") |> String.concat ", "
+            line s $"def Closure{x.tag}({env_args}):"
             let s = indent s
             let inner_args = x.domain_args |> Array.map (fun (L(i,t)) -> $"v{i} : {tyv t}") |> String.concat ", "
             line s $"def inner({inner_args}) -> {tup_ty x.range}:"
-            binds_start x.free_vars (indent s) x.body
+            let _ =
+                let s = indent s
+                if x.free_vars.Length > 0 then 
+                    let nonlocal_args = x.free_vars |> Array.map (fun (L(i,t)) -> $"env_v{i}") |> String.concat ", "
+                    line s $"nonlocal {nonlocal_args}"
+                    x.free_vars |> Array.map (fun (L(i,t)) -> $"v{i} = env_v{i}") |> String.concat "; " |> line s
+                binds_start x.free_vars s x.body
             line s "return inner"
             )
 
@@ -445,9 +447,11 @@ let codegen' backend_type env x =
         let cuda_kernels = StringBuilder().AppendLine("kernel = r\"\"\"")
         let g = Dictionary(HashIdentity.Structural)
         let globals, fwd_dcls, types, functions, main_defs as ars = ResizeArray(), ResizeArray(), ResizeArray(), ResizeArray(), ResizeArray()
+
         let codegen = Cuda.CppDevice.codegen ars env
         let python_code =
-            codegen'' (fun (jp_body,key,(r',backend_name)) ->
+            codegen'' (fun (jp_body,key,r') ->
+                let backend_name = (fst jp_body).node
                 match backend_name with
                 | "Cuda" -> 
                     Utils.memoize g (fun (jp_body,key & (C(args,_))) ->
@@ -468,6 +472,17 @@ let codegen' backend_type env x =
 
         cuda_kernels
             .AppendLine("\"\"\"")
+            .AppendLine("""
+class static_array(list):
+    def __init__(self, length):
+        for _ in range(length):
+            self.append(None)
+
+class static_array_list(static_array):
+    def __init__(self, length):
+        super().__init__(length)
+        self.length = 0
+        """.Trim())
             .Append(python_code).ToString()
 
 let codegen_cuda env x = codegen' Cuda env x

@@ -7,7 +7,7 @@
 		"url": "https://github.com/mrakgr/The-Spiral-Language"
 	},
 	"publisher": "mrakgr",
-	"author": "Marko Grdinic",
+	"author": "Marko Grdinić",
 	"engines": {
 		"vscode": "^1.81.0"
 	},
@@ -40,8 +40,7 @@
 					"enum": [
 						"Fsharp",
 						"C",
-						"Python + Cuda",
-						"Cuda C++"
+						"Python + Cuda"
 					],
 					"default": "Fsharp",
 					"description": "The code generator to use when the file is built."

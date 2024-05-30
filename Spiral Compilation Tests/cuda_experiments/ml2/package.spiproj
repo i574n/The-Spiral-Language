@@ -8,6 +8,7 @@ modules:
         real_core*
         type_arith*
         core-
+        refm
         hashsetm 
         struct* 
         listm
@@ -30,7 +31,9 @@ modules:
         pickler
         
     corepython/
-        base- 
+        base-
+        python_listm
+        jsonm
         
     corecuda/
         base-
