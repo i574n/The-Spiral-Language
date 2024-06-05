@@ -432,7 +432,7 @@ let codegen'' backend_handler (env : PartEvalResult) (x : TypedBind []) =
     line s "def main():"
     binds_start [||] (indent s) x
     s.text.AppendLine() |> ignore
-    line s "if __name__ == '__main__': print(main())"
+    line s "if __name__ == '__main__': result = main(); None if result is None else print(result)"
 
     let program = StringBuilder()
     globals |> Seq.iter (fun x -> program.AppendLine(x) |> ignore)
