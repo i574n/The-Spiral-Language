@@ -244,10 +244,8 @@ type BuildResult =
     | BuildFatalError of string
     | BuildSkip
 
-let repositoryRoot =
-    Lib.SpiralFileSystem.get_source_directory ()
-    |> Lib.SpiralFileSystem.find_parent ".paket" false
-let targetDir = repositoryRoot </> "target/polyglot/spiral_eval"
+let workspaceRoot = Lib.SpiralFileSystem.get_workspace_root ()
+let targetDir = workspaceRoot </> "target/spiral_Eval"
 let traceDir = targetDir </> "supervisor_trace"
 let dir uri =
     let result = FileInfo(Uri(uri).LocalPath).Directory.FullName
