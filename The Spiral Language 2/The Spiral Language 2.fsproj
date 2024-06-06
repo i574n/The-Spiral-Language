@@ -34,6 +34,7 @@
     <Compile Include="../../../lib/spiral/async_.fsx" />
     <Compile Include="../../../lib/spiral/threading.fsx" />
     <Compile Include="../../../lib/spiral/networking.fsx" />
+    <Compile Include="../../../lib/spiral/platform.fsx" />
     <Compile Include="../../../lib/spiral/runtime.fsx" />
     <Compile Include="../../../lib/spiral/file_system.fsx" />
     <Compile Include="../../../lib/spiral/trace.fsx" />
