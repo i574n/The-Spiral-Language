@@ -424,33 +424,35 @@ let supervisor_server (default_env : Startup.DefaultEnv) atten (errors : Supervi
                     b >>= fun (has_error,_) ->
                     if has_error || has_error' then fatal $"File {Path.GetFileNameWithoutExtension file} has a type error somewhere in its path."; Job.unit() else
                     Stream.foldFun (fun _ (_,_,env) -> env) PartEval.Prepass.top_env_empty x.result >>= fun env ->
-                    match Map.tryFind "main" env.term with
-                    | Some main ->
-                        let prototypes_instances = Dictionary(env.prototypes_instances)
-                        let nominals =
-                            let t = HashConsing.HashConsTable()
-                            let d = Dictionary()
-                            env.nominals |> Map.iter (fun k v -> d.Add(k, t.Add {|v with id=k|}))
-                            d
-                        try 
-                            let build codegen backend file_extension =
-                                let (a,_),b = PartEval.Main.peval {prototypes_instances=prototypes_instances; nominals=nominals; backend=backend} main
-                                BuildOk [{|code = codegen b a; file_extension = file_extension|}]
-                            match backend with
-                            | "Fsharp" -> build Codegen.Fsharp.codegen "Fsharp" "fsx"
-                            | "C" -> build Codegen.C.codegen "C" "c"
-                            | "Python + Cuda" -> build Codegen.Python.codegen_cuda "Python" "py"
-                            | "Cuda C++" -> BuildFatalError "The host C++ backend originally made for FPGA, and then ported to Cuda has been removed in v2.10.0 of Spiral. Please use an earlier version to access it." // Date: 5/8/2024
-                            | "Python" -> BuildFatalError "The prototype Python backend has been replaced by the Python + Cuda one in v2.5.0 of Spiral. Please use an earlier version to access it." // Date: 11/3/2023
-                            | "UPMEM: Python + C" -> BuildFatalError "The UPMEM Python + C backend has been replaced by the Python + Cuda one in v2.5.0 of Spiral. Please use an earlier version to access it." // Date: 11/3/2023
-                            | "HLS C++" -> BuildFatalError "The HLS C++ backend has been replaced by the Cuda one in v2.5.0 of Spiral. Please use an earlier version to access it." // Date: 10/17/2023
-                            | "Cython*" | "Cython" -> BuildFatalError "The Cython backend has been replaced by the Python one in v2.3.1 of Spiral. Please use an earlier version to access it." // Date: 12/27/2022
-                            | _ -> BuildFatalError $"Cannot recognize the backend: {backend}"
-                        with
-                            | :? PartEval.Main.TypeError as e -> BuildErrorTrace(show_trace s e.Data0 e.Data1)
-                            | :? CodegenUtils.CodegenError as e -> BuildFatalError(e.Data1)
-                            | :? CodegenUtils.CodegenErrorWithPos as e -> BuildErrorTrace(show_trace s e.Data0 e.Data1)
-                            | ex ->
+                    let body() =
+                        match Map.tryFind "main" env.term with
+                        | Some main ->
+                            let prototypes_instances = Dictionary(env.prototypes_instances)
+                            let nominals = 
+                                let t = HashConsing.HashConsTable()
+                                let d = Dictionary()
+                                env.nominals |> Map.iter (fun k v -> d.Add(k, t.Add {|v with id=k|}))
+                                d
+                            try 
+                                let build codegen backend file_extension =
+                                    let (a,_),b = PartEval.Main.peval {prototypes_instances=prototypes_instances; nominals=nominals; backend=backend} main
+                                    BuildOk [{|code = codegen b a; file_extension = file_extension|}]
+                                match backend with
+                                | "Fsharp" -> build Codegen.Fsharp.codegen "Fsharp" "fsx"
+                                | "C" -> build Codegen.C.codegen "C" "c"
+                                | "Python + Cuda" -> build Codegen.Python.codegen_cuda "Python" "py"
+                                | "Python + Cuda RC" -> build Codegen.PythonRC.codegen_cuda "Python" "py"
+                                | "Cuda C++" -> BuildFatalError "The host C++ backend originally made for FPGAs, and then ported to Cuda has been removed in v2.10.0 of Spiral. Please use an earlier version to access it." // Date: 5/8/2024
+                                | "Python" -> BuildFatalError "The prototype Python backend has been replaced by the Python + Cuda one in v2.5.0 of Spiral. Please use an earlier version to access it." // Date: 11/3/2023
+                                | "UPMEM: Python + C" -> BuildFatalError "The UPMEM Python + C backend has been replaced by the Python + Cuda one in v2.5.0 of Spiral. Please use an earlier version to access it." // Date: 11/3/2023
+                                | "HLS C++" -> BuildFatalError "The HLS C++ backend has been replaced by the Cuda one in v2.5.0 of Spiral. Please use an earlier version to access it." // Date: 10/17/2023
+                                | "Cython*" | "Cython" -> BuildFatalError "The Cython backend has been replaced by the Python one in v2.3.1 of Spiral. Please use an earlier version to access it." // Date: 12/27/2022
+                                | _ -> BuildFatalError $"Cannot recognize the backend: {backend}"
+                            with
+                                | :? PartEval.Main.TypeError as e -> BuildErrorTrace(show_trace s e.Data0 e.Data1)
+                                | :? CodegenUtils.CodegenError as e -> BuildFatalError(e.Data1)
+                                | :? CodegenUtils.CodegenErrorWithPos as e -> BuildErrorTrace(show_trace s e.Data0 e.Data1)
+                                | ex ->
                                 if Directory.Exists traceDir then
                                     let guid = DateTime.Now |> Lib.SpiralDateTime.new_guid_from_date_time
                                     let trace_file = traceDir </> $"{guid}_error.json"
@@ -463,11 +465,13 @@ let supervisor_server (default_env : Startup.DefaultEnv) atten (errors : Supervi
                                     |> Async.Start
                                 trace Critical (fun () -> $"Supervisor.supervisor_server.BuildFile.file_build / ex: {ex |> Sm.format_exception}") _locals
                                 BuildFatalError(ex.Message)
-                    | None ->
-                        // BuildFatalError $"Cannot find `main` in file {Path.GetFileNameWithoutExtension file}."
-                        printfn $"Cannot find `main` in file {Path.GetFileNameWithoutExtension file}."
-                        BuildSkip
-                    |> handle_build_result
+                        | None -> BuildFatalError $"Cannot find `main` in file {Path.GetFileNameWithoutExtension file}."
+
+                    // The partial evaluator is using too much stack space, so as a temporary fix, I am running it on a separate thread with much more of it.
+                    let result = IVar()
+                    let thread = new Threading.Thread(Threading.ThreadStart(body >> IVar.fill result >> Hopac.start), 1 <<< 28) // Stack space = 2 ** 28 = 256mb.
+                    thread.Start()
+                    result >>= handle_build_result
                     )
             let file_find (s : SupervisorState) pdir =
                 trace Verbose (fun () -> $"Supervisor.supervisor_server.BuildFile.file_find / pdir: {pdir}") _locals
@@ -589,11 +593,10 @@ type SpiralHub(supervisor : Supervisor) =
         | Ping _ -> task { return null }
         | Exit _ ->
             async {
-                trace Debug (fun () -> "Exiting...") _locals
+                trace Debug (fun () -> "Supervisor.SpiralHub.ClientToServerMsg / exiting...") _locals
                 async {
-                    do! Async.Sleep 1000
-                    System.Environment.Exit 0
-                    // System.Diagnostics.Process.GetCurrentProcess().Kill()
+                    do! Async.Sleep 300
+                    System.Diagnostics.Process.GetCurrentProcess().Kill ()
                 }
                 |> Async.Start
                 return null
@@ -607,7 +610,7 @@ open Microsoft.Extensions.Logging
 
 let [<EntryPoint>] main args =
     Lib.SpiralTrace.TraceLevel.US0_1 |> Lib.set_trace_level
-    Scheduler.Global.setCreate { Scheduler.Create.Def with MaxStackSize = 1024 * 8192 |> Some }
+    // Scheduler.Global.setCreate { Scheduler.Create.Def with MaxStackSize = 1024 * 8192 |> Some }
 
     let env = Startup.parse args
 

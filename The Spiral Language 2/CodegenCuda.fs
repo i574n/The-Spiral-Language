@@ -1,4 +1,4 @@
-﻿module Spiral.Codegen.Cuda.CppDevice
+﻿module Spiral.Codegen.Cuda
 
 open Spiral
 open Spiral.Utils
@@ -21,11 +21,11 @@ let is_string = function DV(L(_,YPrim StringT)) | DLit(LitString _) -> true | _ 
 let num_bits_needed_to_represent (x : int) = Numerics.BitOperations.Log2(x * 2 |> uint) |> max 1
 
 let sizeof_tyv = function
-    | YPrim (Int64T | UInt64T | Float64T) -> 64
-    | YPrim (Int32T | UInt32T | Float32T) -> 32
-    | YPrim (Int16T | UInt16T) -> 16
-    | YPrim (Int8T | UInt8T | CharT | BoolT) -> 8
-    | _ -> 64
+    | YPrim (Int64T | UInt64T | Float64T) -> 8
+    | YPrim (Int32T | UInt32T | Float32T) -> 4
+    | YPrim (Int16T | UInt16T) -> 2
+    | YPrim (Int8T | UInt8T | CharT | BoolT) -> 1
+    | _ -> 8
 let order_args v = v |> Array.sortWith (fun (L(_,t)) (L(_,t')) -> compare (sizeof_tyv t') (sizeof_tyv t))
 let line x s = if s <> "" then x.text.Append(' ', x.indent).AppendLine s |> ignore
 let line' x s = line x (String.concat " " s)
@@ -39,7 +39,7 @@ let binds_last_data x = x |> Array.last |> function TyLocalReturnData(x,_) | TyL
 
 type UnionRec = {tag : int; free_vars : Map<int * string, TyV[]>}
 type MethodRec = {tag : int; free_vars : L<Tag,Ty>[]; range : Ty; body : TypedBind[]; name : string option}
-type ClosureRec = {tag : int; free_vars : L<Tag,Ty>[]; domain : Ty; range : Ty; body : TypedBind[]}
+type ClosureRec = {tag : int; domain : Ty; range : Ty; body : TypedBind[]}
 type TupleRec = {tag : int; tys : Ty []}
 type CFunRec = {tag : int; domain : Ty; range : Ty}
 
@@ -315,7 +315,7 @@ let codegen (globals : _ ResizeArray, fwd_dcls : _ ResizeArray, types : _ Resize
             binds (indent s) ret fl
             line s "}"
         | TyJoinPoint(a,args) -> return' (jp (a, args))
-        | TyBackend(_,_,r) -> raise_codegen_error_backend r "The Cuda backend does not support nesting of other backends."
+        | TyBackend(_,_,r) -> raise_codegen_error_backend r "The Cuda backend does not support the nesting of other backends."
         | TyWhile(a,b) ->
             let cond =
                 match a with
@@ -492,12 +492,16 @@ let codegen (globals : _ ResizeArray, fwd_dcls : _ ResizeArray, types : _ Resize
         let rename x = Array.map (fun (L(i,t)) -> let x = L(count,t) in count <- count+1; x) x
         loop domain |> List.mapi (fun i x -> let n = env.ty_to_data x |> data_free_vars in i, tup_ty_tyvs n, n |> rename |> assert_not_void)
     and closure : _ -> ClosureRec =
-        jp (fun ((jp_body,key & (C(args,_,domain,range))),i) ->
-            match (fst env.join_point_closure.[jp_body]).[key] with
-            | Some(domain_args, body) -> 
-                let assert_empty x = if Array.isEmpty x then x else raise_codegen_error "The Cuda C++ backend doesn't support closures due to them needing to be heap allocated, only function pointers. For them to be converted to pointers, the closures must not have any free variables in them."
-                {tag=i; free_vars=rdata_free_vars args |> assert_empty; domain=domain; range=range; body=body}
-            | _ -> raise_codegen_error "Compiler error: The method dictionary is malformed"
+        jp (fun ((jp_body,key & (C(args,_,fun_ty))),i) ->
+            match fun_ty with
+            | YFun(domain,range) ->
+                match (fst env.join_point_closure.[jp_body]).[key] with
+                | Some(domain_args, body) -> 
+                    if Array.isEmpty (rdata_free_vars args) = false then raise_codegen_error "The Cuda C++ backend doesn't support closures due to them needing to be heap allocated, only function pointers. For them to be converted to pointers, the closures must not have any free variables in them."
+                    {tag=i; domain=domain; range=range; body=body}
+                | _ -> raise_codegen_error "Compiler error: The method dictionary is malformed"
+            | YFunPtr _ -> raise_codegen_error "Function pointers are not supported in the Cuda backend."
+            | _ -> raise_codegen_error "Compiler error: Unexpected type in the closure join point."
             ) (fun _ s_typ s_fun x ->
             let i, range = x.tag, tup_ty x.range
             let closure_args = closure_args x.domain

@@ -9,6 +9,7 @@ open Spiral.Startup
 open Spiral.BlockParsing
 open Spiral.PartEval.Prepass
 open Spiral.HashConsing
+open SoftCircuits.Collections
 
 type Tag = int
 type [<CustomComparison;CustomEquality>] L<'a,'b when 'a: equality and 'a: comparison> =
@@ -49,6 +50,7 @@ and Ty =
     | YPrim of PrimitiveType
     | YArray of Ty
     | YFun of Ty * Ty
+    | YFunPtr of Ty * Ty
     | YMacro of Macro list
     | YNominal of Nominal
     | YApply of Ty * Ty
@@ -69,6 +71,7 @@ and Data =
     | DNominal of Data * Ty
     | DV of TyV
     | DHashSet of HashSet<Data>
+    | DHashMap of OrderedDictionary<Data,Data> * bool ref
 and TyV = L<Tag,Ty>
 // Unions always go through a join point which enables them to be compared via ref eqaulity.
 // tags and tag_cases are straightforward mapping from cases for the sake of efficiency.
@@ -91,11 +94,12 @@ type RData =
     | ReUnion of ConsedNode<RData * Union>
     | ReNominal of ConsedNode<RData * Ty>
     | ReV of ConsedNode<Tag * Ty>
+    | ReHashMap of ConsedNode<(RData * RData)[]>
 
 type Trace = Range list
 type JoinPointKey =
     | JPMethod of (string ConsedNode * E) * ConsedNode<RData [] * Ty []>
-    | JPClosure of (string ConsedNode * E) * ConsedNode<RData [] * Ty [] * Ty * Ty>
+    | JPClosure of (string ConsedNode * E) * ConsedNode<RData [] * Ty [] * Ty>
 
 type JoinPointCall = JoinPointKey * TyV []
 
@@ -174,7 +178,9 @@ let data_to_rdata (d: LangEnv) (hc : HashConsTable) call_data =
             | DUnion(a,b) -> ReUnion(hc(f a,b))
             | DNominal(a,b) -> ReNominal(hc(f a,b))
             | DB -> ReB
-            | DHashSet _ -> raise_type_error d "Mutable compile time data structures like the HashSets cannot be passed through join points."
+            | DHashMap(x,is_writable) when is_writable.Value = false -> x |> Seq.map (fun kv -> f kv.Key, f kv.Value) |> Seq.toArray |> hc |> ReHashMap
+            | DHashMap _ -> raise_type_error d "The mutable compile time HashMap needs to be made immutable before it can be passed through a join point."
+            | DHashSet _ -> raise_type_error d "The mutable compile-time HashSet cannot be passed through join points."
             ) x
     let x = Array.map f call_data
     call_args.ToArray(),x
@@ -189,13 +195,18 @@ let rename_global_term (s : LangEnv) =
             | DPair(a,b) -> DPair(f a, f b)
             | DForall(body,a,b,c,d) -> DForall(body,Array.map f a,b,c,d)
             | DFunction(body,annot,a,b,c,d) -> DFunction(body,annot,Array.map f a,b,c,d)
-            | DExists(body,annot) -> DExists(body,annot)
+            | DExists(annot,a) -> DExists(annot, f a)
             | DRecord l -> DRecord(Map.map (fun _ -> f) l)
             | DV(L(_,ty)) -> let x = DV(L(!s.i,ty)) in incr s.i; x
             | DUnion(a,b) -> DUnion(f a,b)
             | DNominal(a,b) -> DNominal(f a,b)
             | DSymbol _ | DLit _ | DTLit _ | DB as x -> x
-            | DHashSet _ -> raise_type_error s "Mutable compile time data structures like the HashSets cannot be renamed."
+            | DHashMap(x,is_writable) when is_writable.Value = false -> 
+                let q = OrderedDictionary(HashIdentity.Reference)
+                x |> Seq.iter (fun kv -> q.Add(f kv.Key, f kv.Value))
+                DHashMap(q,is_writable)
+            | DHashMap _ -> raise_type_error s "The mutable compile time HashMap needs to be made immutable before it can be renamed."
+            | DHashSet _ -> raise_type_error s "The mutable compile-time HashSets cannot be renamed."
             ) x
     {s with env_global_term = Array.map f s.env_global_term}
 
@@ -212,6 +223,7 @@ let data_free_vars call_data =
             | DExists(_,a) | DUnion(a,_) | DNominal(a,_) -> f a
             | DSymbol _ | DLit _ | DTLit _ | DB -> ()
             | DHashSet x -> Seq.iter f x
+            | DHashMap(x,_) -> x |> Seq.iter (fun kv -> f kv.Value)
     f call_data
     free_vars.ToArray()
 
@@ -226,6 +238,7 @@ let rdata_free_vars call_data =
         | ReRecord(C'(l,tag)) -> if m.Add tag then Map.iter (fun _ -> g) l
         | ReV(C'((a,b),tag)) -> if m.Add tag then free_vars.Add(L(a,b))
         | ReExists(C'((_,a),tag)) | ReUnion(C'((a,_),tag)) | ReNominal(C'((a,_),tag)) -> if m.Add tag then g a
+        | ReHashMap(C'(x,tag)) -> if m.Add tag then Array.iter (fun (k,v) -> g k; g v) x
         | ReSymbol _ | ReLit _ | ReTLit _ | ReB -> ()
     Array.iter g call_data
     free_vars.ToArray()
@@ -240,6 +253,7 @@ let data_term_vars' call_data =
         | DExists(_,a) | DUnion(a,_) | DNominal(a,_) -> f a
         | DSymbol _ | DTLit _ | DB -> ()
         | DHashSet x -> Seq.iter f x
+        | DHashMap(x,_) -> x |> Seq.iter (fun kv -> f kv.Value)
     f call_data
     term_vars.ToArray()
 
@@ -253,6 +267,7 @@ let data_nominals call_data =
         | DExists _ | DUnion _ | DNominal _ as x -> term_vars.Add(x)
         | DSymbol _ | DTLit _ | DB -> ()
         | DHashSet x -> Seq.iter f x
+        | DHashMap(x,_) -> x |> Seq.iter (fun kv -> f kv.Value)
     f call_data
     term_vars.ToArray()
 
@@ -267,6 +282,7 @@ let data_term_vars call_data =
         | DExists(_,a) | DUnion(a,_) | DNominal(a,_) -> f a
         | DSymbol _ | DTLit _ | DB -> ()
         | DHashSet x -> Seq.iter f x
+        | DHashMap(x,_) -> x |> Seq.iter (fun kv -> f kv.Value)
     f call_data
     term_vars.ToArray()
 
@@ -329,6 +345,7 @@ let show_ty x =
         | YPrim x -> show_primt x
         | YArray a -> p 30 (sprintf "array_base %s" (f 30 a))
         | YFun(a,b) -> p 20 (sprintf "%s -> %s" (f 20 a) (f 19 b))
+        | YFunPtr(a,b) -> p 20 (sprintf "fptr (%s -> %s)" (f 20 a) (f 19 b))
         | YMacro a -> p 30 (List.map (function TypeLit a | Type a -> f -1 a | Text a -> a) a |> String.concat "")
         | YApply(a,b) -> p 30 (sprintf "%s %s" (f 29 a) (f 30 b))
         | YLayout(a,b) -> p 30 (sprintf "%s %s" (show_layout_type b) (f 30 a))
@@ -355,6 +372,8 @@ let show_data x =
         | DUnion(a,_) -> f prec a
         | DNominal(a,b) -> p 0 (sprintf "%s : %s" (f 0 a) (show_ty b))
         | DHashSet _ -> p 0 "<HashSet>"
+        | DHashMap _ -> p 0 "<HashMap>"
+
     f -1 x
 
 let is_lit = function
@@ -468,7 +487,7 @@ let store_ty (s : LangEnv) i v = s.env_stack_type.[i-s.env_global_type.Length] <
 
 type PartEvalResult = {
     join_point_method : Dictionary<string ConsedNode * E,Dictionary<ConsedNode<RData [] * Ty []>,TypedBind [] option * Ty option * string option> * HashConsTable>
-    join_point_closure : Dictionary<string ConsedNode * E,Dictionary<ConsedNode<RData [] * Ty [] * Ty * Ty>,(Data * TypedBind []) option> * HashConsTable>
+    join_point_closure : Dictionary<string ConsedNode * E,Dictionary<ConsedNode<RData [] * Ty [] * Ty>,(Data * TypedBind []) option> * HashConsTable>
     ty_to_data : Ty -> Data
     nominal_apply : Ty -> Ty
     }
@@ -488,7 +507,7 @@ let peval (env : TopEnv) (x : E) =
         | YPair(a,b) -> DPair(f a, f b)
         | YSymbol a -> DSymbol a
         | YRecord l -> DRecord(Map.map (fun _ -> f) l)
-        | YExists | YUnion _ | YLayout _ | YPrim _ | YArray _ | YFun _ | YMacro _ as x -> let r = DV(L(!s.i,x)) in incr s.i; r
+        | YExists | YUnion _ | YLayout _ | YPrim _ | YArray _ | YFun _ | YFunPtr _ | YMacro _ as x -> let r = DV(L(!s.i,x)) in incr s.i; r
         | YNominal _ | YApply _ as a -> DNominal(nominal_type_apply s a |> ty_to_data s, a)
         | YLit x -> DTLit x
         | YTypeFunction _ -> raise_type_error s "Cannot turn a type function into a runtime variable."
@@ -531,15 +550,19 @@ let peval (env : TopEnv) (x : E) =
         backend = s.backend
         }
     and closure_convert s (body,annot,gl_term,gl_ty,sz_term,sz_ty as args) =
-        let join_point_key, call_args, ret_ty =
+        let join_point_key, call_args, fun_ty =
             let s : LangEnv = closure_env s args
-            let domain, range, ret_ty =
+            let domain, range, fun_ty = 
                 match ty s annot with
-                | YFun(a,b) as x -> a,b,x
+                | (YFun(a,b) | YFunPtr(a,b)) as x -> a,b,x
                 | annot -> raise_type_error s <| sprintf "Expected a function type in annotation during closure conversion. Got: %s" (show_ty annot)
             let dict, hc_table = Utils.memoize join_point_closure (fun _ -> Dictionary(HashIdentity.Structural), HashConsTable()) (s.backend, body)
             let call_args, env_global_value = data_to_rdata s hc_table gl_term
-            let join_point_key = hc_table.Add(env_global_value, s.env_global_type, domain, range)
+            let join_point_key = hc_table.Add(env_global_value, s.env_global_type, fun_ty)
+
+            match fun_ty with
+            | YFunPtr _ when call_args.Length <> 0 -> raise_type_error s "Function pointers shouldn't have any runtime free variables in their environment."
+            | _ -> ()
 
             match dict.TryGetValue(join_point_key) with
             | true, _ -> ()
@@ -551,8 +574,8 @@ let peval (env : TopEnv) (x : E) =
                 let seq,ty = term_scope'' s body
                 dict.[join_point_key] <- Some(domain_data, seq)
                 if range <> ty then raise_type_error s <| sprintf "The annotation of the function does not match its body's type.\nGot: %s\nExpected: %s" (show_ty ty) (show_ty range)
-            join_point_key, call_args, ret_ty
-        push_typedop s (TyJoinPoint(JPClosure((s.backend,body),join_point_key),call_args)) ret_ty, ret_ty
+            join_point_key, call_args, fun_ty
+        push_typedop s (TyJoinPoint(JPClosure((s.backend,body),join_point_key),call_args)) fun_ty, fun_ty
     and data_to_ty s x =
         let m = Dictionary(HashIdentity.Reference)
         let rec f x =
@@ -570,6 +593,7 @@ let peval (env : TopEnv) (x : E) =
                 | DFunction(_,None,_,_,_,_) -> raise_type_error s "Cannot convert a function that is not annotated into a type."
                 | DForall _ -> raise_type_error s "Cannot convert a forall into a type."
                 | DHashSet _ -> raise_type_error s "Cannot convert a compile time HashSet into a type."
+                | DHashMap _ -> raise_type_error s "Cannot convert a compile time HashMap into a type."
                 ) x
         f x
     and dyn do_lit s x =
@@ -590,6 +614,7 @@ let peval (env : TopEnv) (x : E) =
                 | DFunction(_,None,_,_,_,_) -> raise_type_error s "Cannot convert a function that is not annotated into a type."
                 | DForall _ -> raise_type_error s "Cannot convert a forall into a type."
                 | DHashSet _ -> raise_type_error s "Cannot convert a compile time HashSet into a type."
+                | DHashMap _ -> raise_type_error s "Cannot convert a compile time HashMap into a type."
                 ) x
         let v = f x
         if dirty then v else x
@@ -658,6 +683,7 @@ let peval (env : TopEnv) (x : E) =
         | TV i -> vt s i
         | TPair(_,a,b) -> YPair(ty s a, ty s b)
         | TFun(_,a,b) -> YFun(ty s a, ty s b)
+        | TFunPtr(_,a,b) -> YFunPtr(ty s a, ty s b)
         | TModule a | TRecord(_,a) -> YRecord(Map.map (fun _ -> ty s) a)
         | TUnion(_,(a,b)) ->
             let tags = Dictionary()
@@ -739,7 +765,7 @@ let peval (env : TopEnv) (x : E) =
                 s.env_stack_term.[0] <- b
                 term s body
             | DForall _, _ -> raise_type_error s "Cannot apply a forall with a term."
-            | DV(L(_,YFun(domain,range) & a_ty) & a), b ->
+            | DV(L(_,(YFun(domain,range) | YFunPtr(domain,range)) & a_ty) & a), b ->
                 let b = dyn false s b
                 let b_ty = data_to_ty s b
                 if domain = b_ty then push_typedop_no_rewrite s (TyApply(a,b)) range
@@ -1324,6 +1350,10 @@ let peval (env : TopEnv) (x : E) =
             let mutable r = Unchecked.defaultof<_>
             if List.exists (fun (a',b) -> is_unify (a,ty s a') && (r <- term s b; true)) b
             then r else raise_type_error s <| sprintf "Typecase miss.\nGot: %s" (show_ty a)
+        | EOp(_,ToFunPtr,[a]) ->
+            match term s a with
+            | DFunction(body,Some(TFun(r,domain,range)),a,b,c,d) -> DFunction(body,Some(TFunPtr(r,domain,range)),a,b,c,d)
+            | a -> raise_type_error s <| sprintf "Expected a function.\nGot: %s" (show_data a)
         | EOp(_,PragmaUnrollPush,[a]) ->
             match term s a with
             | DLit (LitInt32 _) as x -> push_op_no_rewrite s PragmaUnrollPush x YB
@@ -2263,20 +2293,53 @@ let peval (env : TopEnv) (x : E) =
         | EOp(_,HashSetCreate,[]) -> DHashSet(HashSet(HashIdentity.Reference))
         | EOp(_,HashSetAdd,[h;k]) ->
             match term s h, term s k with
-            | DHashSet h, b -> DLit(LitBool(h.Add b))
+            | DHashSet h, k -> DLit(LitBool(h.Add k))
             | h, _ -> raise_type_error s $"Expected a compile time HashSet.\nGot: {show_data h}"
         | EOp(_,HashSetContains,[h;k]) ->
             match term s h, term s k with
-            | DHashSet h, b -> DLit(LitBool(h.Contains b))
+            | DHashSet h, k -> DLit(LitBool(h.Contains k))
             | h, _ -> raise_type_error s $"Expected a compile time HashSet.\nGot: {show_data h}"
         | EOp(_,HashSetRemove,[h;k]) ->
             match term s h, term s k with
-            | DHashSet h, b -> DLit(LitBool(h.Remove b))
+            | DHashSet h, k -> DLit(LitBool(h.Remove k))
             | h, _ -> raise_type_error s $"Expected a compile time HashSet.\nGot: {show_data h}"
         | EOp(_,HashSetCount,[h]) ->
             match term s h with
             | DHashSet h -> DLit(LitInt32(h.Count))
             | h -> raise_type_error s $"Expected a compile time HashSet.\nGot: {show_data h}"
+        | EOp(_,HashMapCreate,[]) -> DHashMap(OrderedDictionary(HashIdentity.Reference), ref true)
+        | EOp(_,HashMapSetImmutable,[h]) -> 
+            match term s h with
+            | DHashMap(_, is_writable) -> is_writable := false; DB
+            | h -> raise_type_error s $"Expected a compile time HashMap.\nGot: {show_data h}"
+        | EOp(_,HashMapAdd,[h;k;v]) ->
+            match term s h, term s k, term s v with
+            | DHashMap(h, is_writable), k, v when is_writable.Value -> if h.TryAdd(k,v) then DB else raise_type_error s "The entry with the same key already exists in the dictionary."
+            | DHashMap(h, _), _, _ -> raise_type_error s "The hash map has been made read-only and cannot be added to."
+            | h, _, _ -> raise_type_error s $"Expected a compile time HashMap.\nGot: {show_data h}"
+        | EOp(_,HashMapTryAdd,[h;k;v]) ->
+            match term s h, term s k, term s v with
+            | DHashMap(h, is_writable), k, v -> if is_writable.Value then DLit(LitBool(h.TryAdd(k,v))) else raise_type_error s "The hash map has been made read-only and cannot be added to."
+            | h, _, _ -> raise_type_error s $"Expected a compile time HashMap.\nGot: {show_data h}"
+        | EOp(_,HashMapContains,[h;k]) ->
+            match term s h, term s k with
+            | DHashMap(h, _), k -> DLit(LitBool(h.ContainsKey k))
+            | h, _ -> raise_type_error s $"Expected a compile time HashMap.\nGot: {show_data h}"
+        | EOp(_,HashMapRemove,[h;k]) ->
+            match term s h, term s k with
+            | DHashMap(h, is_writable), k -> if is_writable.Value then DLit(LitBool(h.Remove k)) else raise_type_error s "The hash map has been made read-only and cannot be removed from."
+            | h, _ -> raise_type_error s $"Expected a compile time HashMap.\nGot: {show_data h}"
+        | EOp(_,HashMapCount,[h]) ->
+            match term s h with
+            | DHashMap(h, _) -> DLit(LitInt32(h.Count))
+            | h -> raise_type_error s $"Expected a compile time HashMap.\nGot: {show_data h}"
+        | EOp(_,HashMapTryGet,[h;k]) ->
+            match term s h, term s k with
+            | DHashMap(h, _), k ->
+                match h.TryGetValue(k) with
+                | true, v -> v
+                | false, _ -> DSymbol "null"
+            | h, _ -> raise_type_error s $"Expected a compile time HashMap.\nGot: {show_data h}"
         | EOp(_,op,a) -> raise_type_error s <| sprintf "Compiler error: %A with %i args not implemented" op (List.length a)
 
     let s : LangEnv = {

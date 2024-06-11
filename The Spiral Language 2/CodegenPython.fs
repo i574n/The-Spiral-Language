@@ -157,7 +157,7 @@ let codegen'' backend_handler (env : PartEvalResult) (x : TypedBind []) =
             r
 
     let cupy_ty x = env.ty_to_data x |> data_free_vars |> cupy_ty
-    let rec binds_start (args : TyV []) (s : CodegenEnv) (x : TypedBind []) = binds (Codegen.C.refc_prepass Set.empty (Set args) x).g_decr s BindsTailEnd x
+    let rec binds_start (args : TyV []) (s : CodegenEnv) (x : TypedBind []) = binds (RefCounting.refc_prepass Set.empty (Set args) x).g_decr s BindsTailEnd x
     and binds g_decr (s : CodegenEnv) (ret : BindsReturn) (stmts : TypedBind []) = 
         let s_len = s.text.Length
         let tup_destruct (a,b) =
@@ -400,10 +400,14 @@ let codegen'' backend_handler (env : PartEvalResult) (x : TypedBind []) =
             binds_start x.free_vars (indent s) x.body
             )
     and closure : _ -> ClosureRec =
-        jp true (fun ((jp_body,key & (C(args,_,domain,range))),i) ->
-            match (fst env.join_point_closure.[jp_body]).[key] with
-            | Some(domain_args, body) -> {tag=i; free_vars=rdata_free_vars args; domain=domain; domain_args=data_free_vars domain_args; range=range; body=body}
-            | _ -> raise_codegen_error "Compiler error: The method dictionary is malformed"
+        jp true (fun ((jp_body,key & (C(args,_,fun_ty))),i) ->
+            match fun_ty with
+            | YFun(domain,range) ->
+                match (fst env.join_point_closure.[jp_body]).[key] with
+                | Some(domain_args, body) -> {tag=i; free_vars=rdata_free_vars args; domain=domain; domain_args=data_free_vars domain_args; range=range; body=body}
+                | _ -> raise_codegen_error "Compiler error: The method dictionary is malformed"
+            | YFunPtr _ -> raise_codegen_error "Function pointers are not supported in the Python backend."
+            | _ -> raise_codegen_error "Compiler error: Unexpected type in the closure join point."
             ) (fun s x ->
             let env_args = x.free_vars |> Array.map (fun (L(i,t)) -> $"env_v{i} : {tyv t}") |> String.concat ", "
             line s $"def Closure{x.tag}({env_args}):"
@@ -448,7 +452,7 @@ let codegen' backend_type env x =
         let g = Dictionary(HashIdentity.Structural)
         let globals, fwd_dcls, types, functions, main_defs as ars = ResizeArray(), ResizeArray(), ResizeArray(), ResizeArray(), ResizeArray()
 
-        let codegen = Cuda.CppDevice.codegen ars env
+        let codegen = Cuda.codegen ars env
         let python_code =
             codegen'' (fun (jp_body,key,r') ->
                 let backend_name = (fst jp_body).node

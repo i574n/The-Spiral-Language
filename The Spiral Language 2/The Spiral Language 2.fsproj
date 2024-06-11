@@ -50,6 +50,7 @@
     <Compile Include="../../../apps/spiral/Eval.fs" />
 
     <None Include="Script1.fsx" />
+    <None Include="Script2.fsx" />
     <Compile Include="PersistentVectorExtensions.fs" />
     <Compile Include="HopacExtensions.fs" />
     <Compile Include="HashConsing.fs" />
@@ -67,9 +68,12 @@
     <Compile Include="PartEval.fs" />
     <Compile Include="CodegenUtils.fs" />
     <Compile Include="CodegenFsharp.fs" />
+    <Compile Include="RefCounting.fs" />
     <Compile Include="CodegenC.fs" />
-    <Compile Include="CodegenCudaCppDevice.fs" />
+    <Compile Include="CodegenCuda.fs" />
     <Compile Include="CodegenPython.fs" />
+    <Compile Include="CodegenCudaRC.fs" />
+    <Compile Include="CodegenPythonRC.fs" />
     <Compile Include="WDiff.fs" />
     <Compile Include="WDiffPrepass.fs" />
     <Compile Include="SpiProj.fs" />
@@ -90,7 +94,10 @@
 
     <PackageReference Include="FSharp.Control.AsyncSeq" Version="3.2.1" />
     <PackageReference Include="System.Reactive.Linq" Version="6.0.1-preview.1" />
+    <PackageReference Include="SoftCircuits.OrderedDictionary" Version="3.2.0" />
+  </ItemGroup>
 
+  <ItemGroup>
     <PackageReference Update="FSharp.Core" Version="8.0.300-beta.24080.5" />
   </ItemGroup>
 

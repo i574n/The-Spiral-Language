@@ -1,3 +1,23 @@
+2.11.0 (WIP/2024)
+
+Created the Cuda backend with reference counting.
+
+* Increased the stack space available to the partial evaluator and the code generator by over 200 fold. Now they are on their own thread.
+
+2.10.11 (6/5/2024)
+
+* Fixed a bug in the renaming of existentials in join points.
+* Expanded the hash map functionality so that the can be made immutable and passed through join points.
+
+2.10.10 (6/3/2024)
+
+* Fixed a crash bug in the inference of existential patterns.
+* Filled in a missing DHashMap case in the ref counting pass for the C prototype backend.
+
+2.10.9 (6/1/2024)
+
+* Added compile time hash maps to the language.
+
 2.10.8 (5/28/2024)
 
 * Speed up compilation of union types on the Cuda backend by 20% by replacing the union tag bitfield with an u8 type.
