@@ -69,7 +69,7 @@ let show_w = function WV(L(i,_)) -> sprintf "v%i" i | WLit a -> lit a
 let args x = x |> Array.map (fun (L(i,_)) -> sprintf "v%i" i) |> String.concat ", "
 let prim x = Infer.show_primt x
 
-type UnionRec = {tag : int; free_vars : Map<string, TyV[]>}
+type UnionRec = {tag : int; free_vars : Map<int * string, TyV[]>}
 type LayoutRec = {tag : int; data : Data; free_vars : TyV[]; free_vars_by_key : Map<string, TyV[]>}
 type MethodRec = {tag : int; free_vars : L<Tag,Ty>[]; range : Ty; body : TypedBind[]}
 type ClosureRec = {tag : int; free_vars : L<Tag,Ty>[]; domain : Ty; domain_args : TyV[]; range : Ty; body : TypedBind[]}

@@ -42,7 +42,7 @@ type BindsReturn =
 let term_vars_to_tys x = x |> Array.map (function WV(L(_,t)) -> t | WLit x -> YPrim (lit_to_primitive_type x))
 let binds_last_data x = x |> Array.last |> function TyLocalReturnData(x,_) | TyLocalReturnOp(_,_,x) -> x | TyLet _ -> raise_codegen_error "Compiler error: Cannot find the return data of the last bind."
 
-type UnionRec = {tag : int; free_vars : Map<string, TyV[]>}
+type UnionRec = {tag : int; free_vars : Map<int * string, TyV[]>}
 type LayoutRec = {tag : int; data : Data; free_vars : TyV[]; free_vars_by_key : Map<string, TyV[]>}
 type MethodRec = {tag : int; free_vars : L<Tag,Ty>[]; range : Ty; body : TypedBind[]; name : string option}
 type ClosureRec = {tag : int; free_vars : L<Tag,Ty>[]; domain : Ty; domain_args : TyV[]; range : Ty; body : TypedBind[]}
@@ -777,7 +777,7 @@ let codegen (globals : _ ResizeArray, fwd_dcls : _ ResizeArray, types : _ Resize
     and heap : _ -> LayoutRec = layout_tmpl "Heap"
     and mut : _ -> LayoutRec = layout_tmpl "Mut"
     and union_tmpl is_stack : Union -> UnionRec = 
-        let inline map_iteri f x = Map.fold (fun i k v -> f i k v; i+1) 0 x |> ignore
+        let inline map_iteri f x = Map.fold (fun i (_, k) v -> f i k v; i+1) 0 x |> ignore
         union (fun s_fwd s_typ s_fun x ->
             let i = x.tag
             match is_stack with
