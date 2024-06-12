@@ -236,7 +236,7 @@ let codegen (globals : _ ResizeArray, fwd_dcls : _ ResizeArray, types : _ Resize
         | YLayout(a,Heap) -> raise_codegen_error "Heap layout types aren't supported in the Cuda C++ backend due to them needing to be heap allocated."
         | YLayout(a,HeapMutable) -> raise_codegen_error "Heap mutable layout types aren't supported in the Cuda C++ backend due to them needing to be heap allocated."
         | YMacro [Text "backend_switch "; Type (YRecord r)] ->
-            match Map.tryFind backend_name r with
+            match r |> Map.tryPick (fun (_, k) v -> if k = backend_name then Some v else None) with
             | Some x -> tup_ty x
             | None -> raise_codegen_error $"In the backend_switch, expected a record with the '{backend_name}' field."
         | YMacro a -> a |> List.map (function Text a -> a | Type a -> tup_ty a | TypeLit a -> type_lit a) |> String.concat ""

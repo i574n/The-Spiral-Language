@@ -460,10 +460,10 @@ let supervisor_server (default_env : Startup.DefaultEnv) atten (errors : Supervi
                                         try
                                             do! $"{ex}" |> Lib.SpiralFileSystem.write_all_text_async trace_file
                                         with ex ->
-                                            trace Critical (fun () -> $"Supervisor.supervisor_server.BuildFile.file_build / ex: {ex |> Sm.format_exception}") _locals
+                                            trace Critical (fun () -> $"Supervisor.supervisor_server.BuildFile.file_build / write text / ex: {ex |> Sm.format_exception}") _locals
                                     }
                                     |> Async.Start
-                                trace Critical (fun () -> $"Supervisor.supervisor_server.BuildFile.file_build / ex: {ex |> Sm.format_exception}") _locals
+                                trace Critical (fun () -> $"Supervisor.supervisor_server.BuildFile.file_build / ex: {ex}") _locals
                                 BuildFatalError(ex.Message)
                         | None -> BuildFatalError $"Cannot find `main` in file {Path.GetFileNameWithoutExtension file}."
 

@@ -10,6 +10,8 @@ open Spiral.BlockParsing
 open Spiral.PartEval.Prepass
 open Spiral.HashConsing
 open SoftCircuits.Collections
+open Lib
+open Polyglot.Common
 
 type Tag = int
 type [<CustomComparison;CustomEquality>] L<'a,'b when 'a: equality and 'a: comparison> =
@@ -46,7 +48,7 @@ and Ty =
     | YPair of Ty * Ty
     | YTypeFunction of body : T * ty : Ty [] * term_stack_size : StackSize * ty_stack_size : StackSize
     | YExists
-    | YRecord of Map<string, Ty>
+    | YRecord of Map<int * string, Ty>
     | YPrim of PrimitiveType
     | YArray of Ty
     | YFun of Ty * Ty
@@ -65,7 +67,7 @@ and Data =
     | DFunction of body : E * annot : T option * term : Data [] * ty : Ty [] * term_stack_size : StackSize * ty_stack_size : StackSize
     | DForall of body : E * term : Data [] * ty : Ty [] * term_stack_size : StackSize * ty_stack_size : StackSize
     | DExists of vars_type : Ty [] * term : Data
-    | DRecord of Map<string, Data>
+    | DRecord of Map<int * string, Data>
     | DLit of Literal
     | DUnion of Data * Union
     | DNominal of Data * Ty
@@ -88,7 +90,7 @@ type RData =
     | ReFunction of ConsedNode<E * RData [] * Ty []> // T option and stack sizes are entirely dependent on the body. And unlike in v0.09/v0.1 there are no reified join points.
     | ReForall of ConsedNode<E * RData [] * Ty []>
     | ReExists of ConsedNode<Ty [] * RData>
-    | ReRecord of ConsedNode<Map<string, RData>>
+    | ReRecord of ConsedNode<Map<int * string, RData>>
     | ReLit of Tokenize.Literal
     | ReTLit of Tokenize.Literal
     | ReUnion of ConsedNode<RData * Union>
@@ -123,7 +125,7 @@ and TypedOp =
     | TyLayoutToHeap of Data * Ty
     | TyLayoutToHeapMutable of Data * Ty
     | TyLayoutIndexAll of TyV
-    | TyLayoutIndexByKey of TyV * string
+    | TyLayoutIndexByKey of TyV * (int * string)
     | TyLayoutHeapMutableSet of TyV * string list * Data
     | TyFailwith of Ty * Data
     | TyApply of TyV * Data
@@ -340,7 +342,7 @@ let show_ty x =
         | YSymbol x -> sprintf ".%s" x
         | YTypeFunction _ -> p 0 (sprintf "? => ?")
         | YExists -> p 0 (sprintf "exists ?. ?")
-        | YRecord l -> sprintf "{%s}" (l |> Map.toList |> List.map (fun (k,v) -> sprintf "%s : %s" k (f -1 v)) |> String.concat "; ")
+        | YRecord l -> sprintf "{%s}" (l |> Map.toList |> List.map (fun ((_,k),v) -> sprintf "%s : %s" k (f -1 v)) |> String.concat "; ")
         | YUnion l -> sprintf "{%s}" (l.Item.cases |> Map.toList |> List.map (fun ((_,k),v) -> sprintf "%s : %s" k (f -1 v)) |> String.concat " | ")
         | YPrim x -> show_primt x
         | YArray a -> p 30 (sprintf "array_base %s" (f 30 a))
@@ -365,7 +367,7 @@ let show_data x =
         | DExists(a,b) ->
             let a = Array.map (show_ty >> sprintf "(%s)") a |> String.concat " "
             p 0 $"exists {a}. %s{f 0 b}"
-        | DRecord l -> sprintf "{%s}" (l |> Map.toList |> List.map (fun (k,v) -> sprintf "%s : %s" k (f -1 v)) |> String.concat "; ")
+        | DRecord l -> sprintf "{%s}" (l |> Map.toList |> List.map (fun ((_,k),v) -> sprintf "%s : %s" k (f -1 v)) |> String.concat "; ")
         | DLit a -> show_lit a
         | DTLit a -> $"`{show_lit a}"
         | DV(L(_,ty)) -> show_ty ty
@@ -684,7 +686,15 @@ let peval (env : TopEnv) (x : E) =
         | TPair(_,a,b) -> YPair(ty s a, ty s b)
         | TFun(_,a,b) -> YFun(ty s a, ty s b)
         | TFunPtr(_,a,b) -> YFunPtr(ty s a, ty s b)
-        | TModule a | TRecord(_,a) -> YRecord(Map.map (fun _ -> ty s) a)
+        | TModule a ->
+            YRecord(
+                a
+                |> Seq.map (fun (KeyValue (k, v)) ->
+                    (a.Count, k), (v |> ty s)
+                )
+                |> Map.ofSeq
+            )
+        | TRecord(_,a) -> YRecord(Map.map (fun _ -> ty s) a)
         | TUnion(_,(a,b)) ->
             let tags = Dictionary()
             let tag_cases = Array.zeroCreate (Map.count a)
@@ -705,7 +715,7 @@ let peval (env : TopEnv) (x : E) =
             | YRecord a ->
                 match ty s b with
                 | YSymbol b ->
-                    match Map.tryFind b a with
+                    match a |> Map.tryPick (fun (_, k) v -> if k = b then Some v else None) with
                     | Some x -> x
                     | None -> raise_type_error s <| sprintf  "Cannot find key %s in the record." b
                 | b -> raise_type_error s <| sprintf "Expected a symbol in the record application.\nGot: %s" (show_ty b)
@@ -751,7 +761,7 @@ let peval (env : TopEnv) (x : E) =
             | DNominal(DUnion _,_), _ -> raise_type_error s "Unions cannot be applied."
             | DNominal(a,_), b -> apply s (a,b)
             | DRecord a, DSymbol b ->
-                match Map.tryFind b a with
+                match a |> Map.tryPick (fun (_, k) v -> if k = b then Some v else None) with
                 | Some a -> a
                 | None -> raise_type_error s <| sprintf "Cannot find the key %s inside the record." b
             | DFunction(body,_,gl_term,gl_ty,sz_term,sz_ty), b ->
@@ -771,14 +781,14 @@ let peval (env : TopEnv) (x : E) =
                 if domain = b_ty then push_typedop_no_rewrite s (TyApply(a,b)) range
                 else raise_type_error s <| sprintf "Cannot apply an argument of type %s to a function of type: %s" (show_ty b_ty) (show_ty a_ty)
             | DV(L(i,YLayout(ty,layout)) as tyv) as a, DSymbol b ->
-                let key = TyLayoutIndexByKey(tyv, b)
-                let ret_ty =
+                let i, ret_ty =
                     match ty with
                     | YRecord r ->
-                        match Map.tryFind b r with
-                        | Some a -> a
+                        match r |> Map.tryPick (fun (i, k) v -> if k = b then Some v else None) with
+                        | Some a -> i, a
                         | None -> raise_type_error s <| sprintf "Cannot find the key %s inside the layout type's record." b
                     | _ -> raise_type_error s <| sprintf "Expected a record inside the layout type.\nGot: %s" (show_ty ty)
+                let key = TyLayoutIndexByKey(tyv, (i, b))
                 match layout with
                 | HeapMutable -> push_typedop_no_rewrite s key ret_ty
                 | Heap -> push_typedop s key ret_ty
@@ -1006,10 +1016,16 @@ let peval (env : TopEnv) (x : E) =
                     | DSymbol a -> a
                     | a -> raise_type_error (add_trace s r) <| sprintf "Expected a symbol.\nGot: %s" (show_data a)
                 x |> fold (fun m x ->
-                    let sym a b = Map.add a (term s b) m
+                    let sym a b =
+                        let i =
+                            m |> Map.tryPick (fun (i, k) _ -> if k = a then Some i else None)
+                            |> Option.defaultValue m.Count
+                        Map.add (i, a) (term s b) m
                     let sym_mod r a b =
-                        match Map.tryFind a m with
-                        | Some a' -> Map.add a (apply s (term s b, a')) m
+                        let v =
+                            m |> Map.tryPick (fun (i, k) v -> if k = a then Some (i, v) else None)
+                        match v with
+                        | Some (i, a') -> Map.add (i, a) (apply s (term s b, a')) m
                         | None -> raise_type_error (add_trace s r) "Cannot find key %s in record." a
                     match x with
                     | RSymbol((_,a),b) -> sym a b
@@ -1018,8 +1034,10 @@ let peval (env : TopEnv) (x : E) =
                     | RVarModify((r,a),b) -> sym_mod r (var r a) b
                     ) withs
                 |> fold (fun m -> function
-                    | WSymbol(r,a) -> Map.remove a m
-                    | WVar(r,a) -> Map.remove (var r a) m
+                    | WSymbol(r,a) ->
+                        m |> Map.filter (fun (_, k) _ -> k <> a)
+                    | WVar(r,a) ->
+                        m |> Map.filter (fun (_, k) _ -> k <> var r a)
                     ) withouts
 
             let rec dive m = function
@@ -1027,9 +1045,11 @@ let peval (env : TopEnv) (x : E) =
                     let s = add_trace s r
                     match term s x with
                     | DSymbol b ->
-                        match Map.tryFind b m with
-                        | Some (DRecord a) -> Map.add b (DRecord (dive a xs)) m
-                        | Some a -> raise_type_error s <| sprintf "Expected a record as the result of indexing.\nGot: %s" (show_data a)
+                        let v =
+                            m |> Map.tryPick (fun (i, k) v -> if k = b then Some (i, v) else None)
+                        match v with
+                        | Some (i, DRecord a) -> Map.add (i, b) (DRecord (dive a xs)) m
+                        | Some a -> raise_type_error s <| sprintf "Expected a record as the result of indexing.\nGot: %s" (show_data (a |> snd))
                         | None -> raise_type_error s <| sprintf "Cannot find the key %s in a record." b
                     | b -> raise_type_error s <| sprintf "Expected a symbol.\nGot: %s" (show_data b)
                 | [] -> map m
@@ -1042,7 +1062,7 @@ let peval (env : TopEnv) (x : E) =
             | [] -> map Map.empty
             |> DRecord
         | EPatternMemo _ | EReal _ -> failwith "Compiler error: Should have been eliminated during the prepass."
-        | EModule a -> DRecord(Map.map (fun _ -> term s) a)
+        | EModule a -> DRecord(a |> Seq.map (fun (KeyValue (k, v)) -> (a.Count, k), (v |> term s)) |> Map.ofSeq)
         | EPair(r,a,b) -> DPair(term s a, term s b)
         | ESeq(r,a,b) ->
             let s = add_trace s r
@@ -1082,14 +1102,41 @@ let peval (env : TopEnv) (x : E) =
                 List.fold (fun (r,a) (r',b) ->
                     match a with
                     | YRecord a ->
-                        match Map.tryFind b a with
+                        match a |> Map.tryPick (fun (_, k) v -> if k = b then Some v else None) with
                         | Some a -> r', a
                         | None -> raise_type_error (add_trace s r) <| sprintf "Key %s not found in the layout type." b
                     | a -> raise_type_error (add_trace s r) <| sprintf "Expected a record.\nGot: %s" (show_ty a)
                     ) (r,a_ty) b |> snd
             let c = term s c |> dyn false s
+            let c =
+                match c with
+                | DRecord c ->
+                    c
+                    |> Seq.map (fun (KeyValue ((i, k), v)) ->
+                        let i =
+                            match c_ty with
+                            | YRecord a ->
+                                a |> Map.tryPick (fun (i', k') _ -> if k = k' then Some i' else None)
+                            | _ -> None
+                            |> Option.defaultValue i
+                        (i, k), v
+                    )
+                    |> Map.ofSeq
+                    |> DRecord
+                | _ -> c
             if data_to_ty s c = c_ty then push_typedop_no_rewrite s (TyLayoutHeapMutableSet(a,List.map snd b,c)) YB
-            else raise_type_error s <| sprintf "The two side do not have the same type.\nGot: %s\nExpected: %s" (show_ty a_ty) (show_ty c_ty)
+            else
+                trace Debug
+                    (fun () -> $"PartEval.peval / EHeapMutableSet")
+                    (fun () ->
+                        let serialize x =
+                            try
+                                x |> FSharp.Json.Json.serialize
+                            with ex ->
+                                $"%A{x}\nex: %A{ex |> SpiralSm.format_exception}\n\n"
+                            |> SpiralSm.replace "c:/Users/i574n/scoop/persist/vscode-insiders/data/extensions/mrakgr.spiral-lang-vscode-2.4.21/" ""
+                        $"a_ty: %A{a_ty |> serialize} / c_ty: %A{c_ty |> serialize} / c: %A{c |> serialize} / a: %A{a |> serialize} / data_to_ty s c: {data_to_ty s c |> serialize} / s: %A{s |> serialize}")
+                raise_type_error s <| sprintf "The two side do not have the same type.\nGot: %s\nExpected: %s" (show_ty a_ty) (show_ty c_ty)
         | EMacro(r,a,b) ->
             let s = add_trace s r
             let a = a |> List.map (function MText x -> CMText x | MTerm x -> CMTerm(term s x |> dyn false s) | MType x -> CMType(ty s x) | MLitType x -> CMTypeLit(ty s x |> assert_ty_lit s))
@@ -1289,7 +1336,7 @@ let peval (env : TopEnv) (x : E) =
                 let rec loop = function
                     | x :: x' ->
                         let sym a b =
-                            match Map.tryFind a l with
+                            match l |> Map.tryPick (fun (_, k) v -> if k = a then Some v else None) with
                             | Some a -> store_term s b a; loop x'
                             | None -> term s on_fail
                         match x with
@@ -1330,7 +1377,12 @@ let peval (env : TopEnv) (x : E) =
                     | YPair(a,b), YPair(a',b') -> f (a,a') && f (b,b')
                     | YSymbol a, YSymbol b -> a = b
                     | YTypeFunction(a,b,c,d), YTypeFunction(a',b',c',d') -> a = a' && Array.forall2 (fun b b' -> f (b,b')) b b' && c = c' && d = d'
-                    | YRecord a, YRecord a' -> Map.forall (fun k v' -> match Map.tryFind k a with Some v -> f (v, v') | None -> false) a'
+                    | YRecord a, YRecord a' ->
+                        Map.forall (fun k v' ->
+                            match a |> Map.tryPick (fun k' v -> if k' = k then Some v else None) with
+                            | Some v -> f (v, v')
+                            | None -> false
+                        ) a'
                     | YPrim a, YPrim a' -> a = a'
                     | YArray a, YArray a' -> f (a, a')
                     | YMacro a, YMacro a' ->
@@ -1516,13 +1568,32 @@ let peval (env : TopEnv) (x : E) =
             | a -> raise_type_error s <| sprintf "Expected an array_base.\nGot: %s" (show_data a)
         | EOp(_,RecordMap,[a;b]) ->
             match term2 s a b with
-            | a, DRecord l -> Map.map (fun k v -> apply s (a, record2 ("key", DSymbol k) ("value", v))) l |> DRecord
+            | a, DRecord l ->
+                Map.map (fun (i,k) v ->
+                    let ik =
+                        l
+                        |> Map.tryPick (fun (i',k') _ -> if k' = "key" then Some (i',k') else None)
+                        |> Option.defaultValue (0, "key")
+                    let iv =
+                        l
+                        |> Map.tryPick (fun (i',k') _ -> if k' = "value" then Some (i',k') else None)
+                        |> Option.defaultValue (0, "value")
+                    apply s (a, record2 (ik, DSymbol k) (iv, v))
+                ) l |> DRecord
             | _, b -> raise_type_error s <| sprintf "Expected a record.\nGot: %s" (show_data b)
         | EOp(_,RecordIter,[a;b]) ->
             match term2 s a b with
             | a, DRecord l ->
-                Map.iter (fun k v ->
-                    match apply s (a, record2 ("key", DSymbol k) ("value", v)) with
+                Map.iter (fun (i,k) v ->
+                    let ik =
+                        l
+                        |> Map.tryPick (fun (i',k') v' -> if k' = "key" then Some (i',k') else None)
+                        |> Option.defaultValue (0, "key")
+                    let iv =
+                        l
+                        |> Map.tryPick (fun (i',k') v' -> if k' = "value" then Some (i',k') else None)
+                        |> Option.defaultValue (0, "value")
+                    match apply s (a, record2 (ik, DSymbol k) (iv, v)) with
                     | DB -> ()
                     | x -> raise_type_error s <| sprintf "Expected an unit value.\nGot: %s" (show_data x)
                     ) l
@@ -1531,8 +1602,16 @@ let peval (env : TopEnv) (x : E) =
         | EOp(_,RecordFilter,[a;b]) ->
             match term2 s a b with
             | a, DRecord l ->
-                Map.filter (fun k v ->
-                    match apply s (a, record2 ("key", DSymbol k) ("value", v)) with
+                Map.filter (fun (i,k) v ->
+                    let ik =
+                        l
+                        |> Map.tryPick (fun (i',k') v' -> if k' = "key" then Some (i',k') else None)
+                        |> Option.defaultValue (0, "key")
+                    let iv =
+                        l
+                        |> Map.tryPick (fun (i',k') v' -> if k' = "value" then Some (i',k') else None)
+                        |> Option.defaultValue (0, "value")
+                    match apply s (a, record2 (ik, DSymbol k) (iv, v)) with
                     | DLit(LitBool x) -> x
                     | x -> raise_type_error s <| sprintf "Expected a bool literal.\nGot: %s" (show_data x)
                     ) l
@@ -1540,11 +1619,41 @@ let peval (env : TopEnv) (x : E) =
             | _, b -> raise_type_error s <| sprintf "Expected a record.\nGot: %s" (show_data b)
         | EOp(_,RecordFold,[a;b;c]) ->
             match term3 s a b c with
-            | a, state, DRecord l -> Map.fold (fun state k v -> apply s (a, record3 ("state", state) ("key", DSymbol k) ("value", v))) state l
+            | a, state, DRecord l ->
+                Map.fold (fun state (i, k) v ->
+                    let ik =
+                        l
+                        |> Map.tryPick (fun (i',k') _ -> if k' = "key" then Some (i',k') else None)
+                        |> Option.defaultValue (0, "key")
+                    let iv =
+                        l
+                        |> Map.tryPick (fun (i',k') _ -> if k' = "value" then Some (i',k') else None)
+                        |> Option.defaultValue (0, "value")
+                    let is =
+                        l
+                        |> Map.tryPick (fun (i',k') _ -> if k' = "state" then Some (i',k') else None)
+                        |> Option.defaultValue (0, "state")
+                    apply s (a, record3 (is, state) (ik, DSymbol k) (iv, v))
+                ) state l
             | _, _, r -> raise_type_error s <| sprintf "Expected a record.\nGot: %s" (show_data r)
         | EOp(_,RecordFoldBack,[a;b;c]) ->
             match term3 s a b c with
-            | a, state, DRecord l -> Map.foldBack (fun k v state -> apply s (a, record3 ("state", state) ("key", DSymbol k) ("value", v))) l state
+            | a, state, DRecord l ->
+                Map.foldBack (fun (i,k) v state ->
+                    let ik =
+                        l
+                        |> Map.tryPick (fun (i',k') _ -> if k' = "key" then Some (i',k') else None)
+                        |> Option.defaultValue (0, "key")
+                    let iv =
+                        l
+                        |> Map.tryPick (fun (i',k') _ -> if k' = "value" then Some (i',k') else None)
+                        |> Option.defaultValue (0, "value")
+                    let is =
+                        l
+                        |> Map.tryPick (fun (i',k') _ -> if k' = "state" then Some (i',k') else None)
+                        |> Option.defaultValue (0, "state")
+                    apply s (a, record3 (is, state) (ik, DSymbol k) (iv, v))
+                ) l state
             | _, _, r -> raise_type_error s <| sprintf "Expected a record.\nGot: %s" (show_data r)
         | EOp(_,RecordLength,[a]) ->
             match term s a with
@@ -1552,10 +1661,10 @@ let peval (env : TopEnv) (x : E) =
             | r -> raise_type_error s <| sprintf "Expected a record.\nGot: %s" (show_data r)
         | EOp(_,RecordTypeMap,[a;EType(_,b)]) ->
             let a,l = term s a, ty_record s b
-            Map.map (fun k v -> type_apply s (apply s (a, DSymbol k)) v) l |> DRecord
+            Map.map (fun (_,k) v -> type_apply s (apply s (a, DSymbol k)) v) l |> DRecord
         | EOp(_,RecordTypeIter,[a;EType(_,b)]) ->
             let a,l = term s a, ty_record s b
-            Map.iter (fun k v ->
+            Map.iter (fun (_,k) v ->
                 match type_apply s (apply s (a, DSymbol k)) v with
                 | DB -> ()
                 | x -> raise_type_error s <| sprintf "Expected an unit value.\nGot: %s" (show_data x)
@@ -1563,21 +1672,21 @@ let peval (env : TopEnv) (x : E) =
             DB
         | EOp(_,RecordTypeFold,[f;state;EType(_,x)]) ->
             let f,state,l = term s f, term s state, ty_record s x
-            Map.fold (fun state k v -> type_apply s (apply s ((apply s (f, state), DSymbol k))) v) state l
+            Map.fold (fun state (_,k) v -> type_apply s (apply s ((apply s (f, state), DSymbol k))) v) state l
         | EOp(_,RecordTypeFoldBack,[f;state;EType(_,x)]) ->
             let f,state,l = term s f, term s state, ty_record s x
-            Map.foldBack (fun k v state -> apply s ((type_apply s (apply s (f, DSymbol k)) v), state)) l state
+            Map.foldBack (fun (_,k) v state -> apply s ((type_apply s (apply s (f, DSymbol k)) v), state)) l state
         | EOp(_,RecordTypeLength,[EType(_,a)]) ->
             Map.count (ty_record s a) |> LitInt32 |> DLit
         | EOp(_,RecordTypeTryFind,[EType(_,a);k;on_succ;on_fail]) ->
             match ty_record s a, term s k with
             | l, DSymbol k ->
-                match Map.tryFind k l with
+                match l |> Map.tryPick (fun (_, k') v -> if k' = k then Some v else None) with
                 | Some v -> type_apply s (term s on_succ) v
                 | None -> apply s (term s on_fail, DB)
             | _, k -> raise_type_error s <| sprintf "Expected a symbol.\nGot: %s" (show_data k)
         | EOp(_,UnionToRecord,[EType(_,a);on_succ]) ->
-            type_apply s (term s on_succ) (YRecord ((ty_union s a).Item.cases |> Seq.map (fun (KeyValue ((_, k), v)) -> k, v) |> Map.ofSeq))
+            type_apply s (term s on_succ) (YRecord (ty_union s a).Item.cases)
         | EOp(_,Add,[a;b]) ->
             let inline op a b = a + b
             match term2 s a b with

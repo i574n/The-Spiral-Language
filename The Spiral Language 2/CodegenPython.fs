@@ -91,7 +91,7 @@ let cupy_ty x =
     | _ -> er()
 
 type UnionRec = {tag : int; free_vars : Map<int * string, TyV[]>}
-type LayoutRec = {tag : int; data : Data; free_vars : TyV[]; free_vars_by_key : Map<string, TyV[]>}
+type LayoutRec = {tag : int; data : Data; free_vars : TyV[]; free_vars_by_key : Map<int * string, TyV[]>}
 type MethodRec = {tag : int; free_vars : L<Tag,Ty>[]; range : Ty; body : TypedBind[]}
 type ClosureRec = {tag : int; free_vars : L<Tag,Ty>[]; domain : Ty; domain_args : TyV[]; range : Ty; body : TypedBind[]}
 
@@ -201,7 +201,7 @@ let codegen'' backend_handler (env : PartEvalResult) (x : TypedBind []) =
         | YLayout(a,Heap) -> sprintf "Heap%i" (heap a).tag
         | YLayout(a,HeapMutable) -> sprintf "Mut%i" (mut a).tag
         | YMacro [Text "backend_switch "; Type (YRecord r)] ->
-            match Map.tryFind backend_name r with
+            match r |> Map.tryPick (fun (_, k) v -> if k = backend_name then Some v else None) with
             | Some x -> tup_ty x
             | None -> raise_codegen_error $"In the backend_switch, expected a record with the '{backend_name}' field."
         | YMacro a -> a |> List.map (function Text a -> a | Type a -> tup_ty a | TypeLit a -> type_lit a) |> String.concat ""
@@ -290,9 +290,18 @@ let codegen'' backend_handler (env : PartEvalResult) (x : TypedBind []) =
         | TyLayoutToHeap(a,b) -> sprintf "Heap%i(%s)" (heap b).tag (tup_data' a) |> return'
         | TyLayoutToHeapMutable(a,b) -> sprintf "Mut%i(%s)" (mut b).tag (tup_data' a) |> return'
         | TyLayoutIndexAll(x) -> match x with L(i,YLayout(a,lay)) -> (match lay with Heap -> heap a | HeapMutable -> mut a).free_vars |> layout_index i | _ -> failwith "Compiler error: Expected the TyV in layout index to be a layout type."
-        | TyLayoutIndexByKey(x,key) -> match x with L(i,YLayout(a,lay)) -> (match lay with Heap -> heap a | HeapMutable -> mut a).free_vars_by_key.[key] |> layout_index i | _ -> failwith "Compiler error: Expected the TyV in layout index by key to be a layout type."
+        | TyLayoutIndexByKey(x,key) ->
+            match x with
+            | L(i,YLayout(a,lay)) ->
+                (match lay with Heap -> heap a | HeapMutable -> mut a).free_vars_by_key
+                |> Map.tryPick (fun k v -> if k = key then Some v else None)
+                |> Option.iter (layout_index i)
+            | _ -> failwith "Compiler error: Expected the TyV in layout index by key to be a layout type."
         | TyLayoutHeapMutableSet(L(i,t),b,c) ->
-            let a = List.fold (fun s k -> match s with DRecord l -> l.[k] | _ -> raise_codegen_error "Compiler error: Expected a record.") (mut t).data b
+            let a = List.fold (fun s k ->
+                match s with
+                | DRecord l -> l |> Map.pick (fun (_,k') v -> if k = k' then Some v else None)
+                | _ -> raise_codegen_error "Compiler error: Expected a record.") (mut t).data b
             Array.iter2 (fun (L(i',_)) b -> line s $"v{i}.v{i'} = {show_w b}") (data_free_vars a) (data_term_vars c)
         | TyArrayLiteral(a,b) -> return' <| sprintf "cp.array([%s],dtype=%s)" (List.map tup_data' b |> String.concat ", ") (cupy_ty a)
         | TyArrayCreate(a,b) -> return' $"cp.empty({tup_data b},dtype={cupy_ty a})" 

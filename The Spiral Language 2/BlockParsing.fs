@@ -335,7 +335,7 @@ and RawTExpr =
     | RawTPair of VSCRange * RawTExpr * RawTExpr
     | RawTFun of VSCRange * RawTExpr * RawTExpr
     | RawTArray of VSCRange * RawTExpr
-    | RawTRecord of VSCRange * Map<string,RawTExpr>
+    | RawTRecord of VSCRange * Map<int * string,RawTExpr>
     | RawTSymbol of VSCRange * SymbolString
     | RawTApply of VSCRange * RawTExpr * RawTExpr
     | RawTForall of VSCRange * TypeVar * RawTExpr
@@ -1060,7 +1060,7 @@ and root_type_record (flags : RootTypeFlags) d =
     (range (curlies (sepBy ((range record_var .>> skip_op ":") .>>. root_type flags) (optional (skip_op ";"))))
     >>= fun (r,x) _ ->
         x |> List.map fst |> duplicates DuplicateRecordTypeVar
-        |> function [] -> Ok(RawTRecord(r,x |> List.map (fun ((_,n),x) -> n,x) |> Map.ofList)) | er -> Error er
+        |> function [] -> Ok(RawTRecord(r,x |> List.mapi (fun i ((_,n),x) -> (i,n),x) |> Map.ofList)) | er -> Error er
         ) d
 and root_type_union (flags : RootTypeFlags) d =
     let bar = bar (col d)
