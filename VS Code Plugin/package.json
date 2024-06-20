@@ -147,6 +147,7 @@
 		]
 	},
 	"scripts": {
+    "outdated-pre": "npm-check-updates --target greatest",
 		"vscode:prepublish": "npm run esbuild-base -- --minify",
 		"esbuild-base": "esbuild ./src/index.ts --bundle --outfile=out/index.js --external:vscode --format=cjs --platform=node",
 		"esbuild": "npm run esbuild-base -- --sourcemap",
@@ -157,11 +158,12 @@
 		"spiral"
 	],
 	"devDependencies": {
-		"@types/node": "~20.4",
+    "npm-check-updates": "~17.0.0-5",
+		"@types/node": "~20.14",
 		"@types/vscode": "~1.81",
-		"@vscode/vsce": "~2.20",
-		"esbuild": "^0.20.2",
-		"typescript": "^5.4.2"
+		"@vscode/vsce": "~2.27",
+		"esbuild": "~0.21",
+		"typescript": "next"
 	},
 	"dependencies": {
 		"@microsoft/signalr": "^8.0.0"
