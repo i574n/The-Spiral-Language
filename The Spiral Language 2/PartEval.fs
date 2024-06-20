@@ -575,6 +575,22 @@ let peval (env : TopEnv) (x : E) =
                 dict.[join_point_key] <- None
                 let seq,ty = term_scope'' s body
                 dict.[join_point_key] <- Some(domain_data, seq)
+                let ty =
+                    match ty with
+                    | YRecord a ->
+                        a
+                        |> Seq.map (fun (KeyValue ((i, k), v)) ->
+                            let i =
+                                match range with
+                                | YRecord a ->
+                                    a |> Map.tryPick (fun (i', k') _ -> if k = k' then Some i' else None)
+                                | _ -> None
+                                |> Option.defaultValue i
+                            (i, k), v
+                        )
+                        |> Map.ofSeq
+                        |> YRecord
+                    | _ -> ty
                 if range <> ty then raise_type_error s <| sprintf "The annotation of the function does not match its body's type.\nGot: %s\nExpected: %s" (show_ty ty) (show_ty range)
             join_point_key, call_args, fun_ty
         push_typedop s (TyJoinPoint(JPClosure((s.backend,body),join_point_key),call_args)) fun_ty, fun_ty
