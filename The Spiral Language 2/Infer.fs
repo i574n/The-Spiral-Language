@@ -3,6 +3,7 @@ module Spiral.Infer
 open VSCTypes
 open Spiral.Startup
 open Spiral.BlockParsing
+open Polyglot.Common
 
 type [<ReferenceEquality>] 'a ref' = {mutable contents' : 'a}
 type TT =
@@ -47,7 +48,7 @@ and T =
     | TyPrim of PrimitiveType
     | TySymbol of string
     | TyPair of T * T
-    | TyRecord of Map<string, T>
+    | TyRecord of Map<int * string, T>
     | TyModule of Map<string, T>
     | TyComment of Comments * T
     | TyFun of T * T
@@ -525,7 +526,7 @@ let show_t (env : TopEnv) x =
                     )
                 |> String.concat "\n"
             else "module"
-        | TyRecord l -> sprintf "{%s}" (l |> Map.toList |> List.map (fun (k,v) -> sprintf "%s : %s" k (f -1 v)) |> String.concat "; ")
+        | TyRecord l -> sprintf "{%s}" (l |> Map.toList |> List.map (fun ((i,k),v) -> sprintf "%s{%d} : %s" k i (f -1 v)) |> String.concat "; ")
         | TyUnion(l,_) -> sprintf "{%s}" (l |> Map.toList |> List.map (fun ((_,k),v) -> sprintf "%s : %s" k (f -1 v)) |> String.concat "| ")
         | TyMacro a -> p 30 (List.map (function TMLitVar a | TMVar a -> f -1 a | TMText a -> a) a |> String.concat "")
         | TyLayout(a,b) -> p 30 (sprintf "%s %s" (show_layout_type b) (f 30 a))
@@ -983,7 +984,10 @@ let infer package_id module_id (top_env' : TopEnv) expr =
     let apply_record r s l x =
         match visit_t x with
         | TySymbol x ->
-            match Map.tryFind x l with
+            trace Debug
+                (fun () -> $"Infer.infer / apply_record / TySymbol")
+                (fun () -> $"x: %A{x}")
+            match l |> Map.tryPick (fun (_, k) v -> if k = x then Some v else None) with
             | Some x ->
                 let com = match x with TyComment(com,_) -> com | _ -> ""
                 hover_types.Add(r,(x,com))
@@ -1145,34 +1149,62 @@ let infer package_id module_id (top_env' : TopEnv) expr =
             let eval m =
                 let m = (m,withs) ||> List.fold (fun m x ->
                     if x.is_modify then
-                        let q = match Map.tryFind x.symbol m with Some q -> q | None -> errors.Add(x.range,RecordIndexFailed x.symbol); fresh_var scope
+                        let i, q =
+                            match m |> Map.tryPick (fun (i, k) v -> if k = x.symbol then Some (i, v) else None) with
+                            | Some q ->
+                                if x.symbol = "trace_file" then
+                                    trace Debug
+                                        (fun () -> $"Infer.infer / eval modify")
+                                        (fun () -> $"m.Count: %A{m.Count} / x.symbol: {x.symbol} / q: %A{q}")
+                                q
+                            | None -> errors.Add(x.range,RecordIndexFailed x.symbol); m.Count, fresh_var scope
                         let w = fresh_var scope
                         unify x.range (TyFun(q,w)) x.var
                         f x.var x.body
-                        Map.add x.symbol w m
+                        Map.add (i, x.symbol) w m
                     else
                         f x.var x.body
-                        Map.add x.symbol x.var m
+                        trace Debug
+                            (fun () -> $"Infer.infer / eval modify")
+                            (fun () -> $"m.Count: %A{m.Count} / x.symbol: {x.symbol} / q: %A{q}")
+                        let i =
+                            m
+                            |> Map.tryPick (fun (i, k) v -> if k = x.symbol then Some i else None)
+                            |> Option.defaultValue m.Count
+                        Map.add (i, x.symbol) x.var m
                     )
-                withouts |> List.fold (fun m x -> Map.remove x.symbol m) m
+                withouts |> List.fold (fun m x -> m |> Map.filter (fun (_, k) _ -> k <> x.symbol)) m
 
             let bind s = withs |> List.iter (fun x ->
                 if x.is_blocked = false then
-                    if x.is_modify then Map.tryFind x.symbol s |> Option.iter (fun s -> unify x.range x.var (TyFun(fresh_var scope,s)))
-                    else Map.tryFind x.symbol s |> Option.iter (unify x.range x.var)
+                    if x.is_modify then
+                        s
+                        |> Map.tryPick (fun (i, k') v -> if k' = x.symbol then Some (i, v) else None)
+                        |> Option.iter (fun (_, k) -> unify x.range x.var (TyFun(fresh_var scope,k)))
+                    else
+                        s
+                        |> Map.tryPick (fun (i, k') v -> if k' = x.symbol then Some (i, v) else None)
+                        |> Option.iter (fun (_, k) -> k |> unify x.range x.var)
                 )
 
             let rec tail' m = function
                 | x :: xs ->
                     match f' x with
                     | TySymbol k ->
-                        match Map.tryFind k m with
-                        | Some m ->
+                        match m |> Map.tryPick (fun (i, k') v -> if k' = k then Some (i, v) else None) with
+                        | Some (i, m) ->
+                            trace Debug
+                                (fun () -> $"Infer.infer / tail'")
+                                (fun () -> $"i: %A{i} / k: {k}")
                             match visit_t m with
                             | TyRecord m -> tail' m xs
                             | m -> errors.Add(range_of_expr x, ExpectedRecordAsResultOfIndex m); eval Map.empty
                         | _ -> errors.Add(range_of_expr x, RecordIndexFailed k); eval Map.empty
-                        |> fun v -> Map.add k (TyRecord v) m
+                        |> fun v ->
+                            let i = m |> Map.tryPick (fun (i, k') v -> if k' = k then Some (i, v) else None)
+                            match i with
+                            | Some (i, _) -> Map.add (i, k) (TyRecord v) m
+                            | None -> Map.add (m.Count, k) (TyRecord v) m
                     | TyMetavar _ -> errors.Add(range_of_expr x, MetavarsNotAllowedInRecordWith); eval Map.empty
                     | a -> errors.Add(range_of_expr x, ExpectedSymbolInRecordWith a); eval Map.empty
                 | [] -> eval m
@@ -1181,18 +1213,24 @@ let infer package_id module_id (top_env' : TopEnv) expr =
                 | x :: xs ->
                     match f' x with
                     | TySymbol k ->
-                        match Map.tryFind k m, Map.tryFind k s with
-                        | Some m, Some s ->
+                        match
+                            m |> Map.tryPick (fun (i, k') v -> if k' = k then Some (i, v) else None),
+                            s |> Map.tryPick (fun (i, k') v -> if k' = k then Some (i, v) else None)
+                        with
+                        | Some (i,m), Some (_i',s) ->
+                            trace Debug
+                                (fun () -> $"Infer.infer / tail")
+                                (fun () -> $"i: %A{i} / _i': {_i'}")
                             match visit_t m, visit_t s with
-                            | TyRecord m, TyRecord s -> tail (m,s) xs
-                            | TyRecord m, _ -> tail' m xs
-                            | m, _ -> errors.Add(range_of_expr x, ExpectedRecordAsResultOfIndex m); eval Map.empty
-                        | Some m, None ->
+                            | TyRecord m, TyRecord s -> i, tail (m,s) xs
+                            | TyRecord m, _ -> i, tail' m xs
+                            | m, _ -> errors.Add(range_of_expr x, ExpectedRecordAsResultOfIndex m); i, eval Map.empty
+                        | Some (i,m), None ->
                             match visit_t m with
-                            | TyRecord m -> tail' m xs
-                            | m -> errors.Add(range_of_expr x, ExpectedRecordAsResultOfIndex m); eval Map.empty
-                        | _ -> errors.Add(range_of_expr x, RecordIndexFailed k); eval Map.empty
-                        |> fun v -> Map.add k (TyRecord v) m
+                            | TyRecord m -> i, tail' m xs
+                            | m -> errors.Add(range_of_expr x, ExpectedRecordAsResultOfIndex m); i, eval Map.empty
+                        | _ -> errors.Add(range_of_expr x, RecordIndexFailed k); i, eval Map.empty
+                        |> fun (i,v) -> Map.add (i,k) (TyRecord v) m
                     | TyMetavar _ -> errors.Add(range_of_expr x, MetavarsNotAllowedInRecordWith); eval Map.empty
                     | a -> errors.Add(range_of_expr x, ExpectedSymbolInRecordWith a); eval Map.empty
                 | [] -> bind s; eval m
@@ -1253,7 +1291,10 @@ let infer package_id module_id (top_env' : TopEnv) expr =
                     | TyRecord a ->
                         match b' with
                         | TySymbol b ->
-                            match Map.tryFind b a with
+                            trace Debug
+                                (fun () -> $"Infer.infer / apply / RawHeapMutableSet(r,a,b,c)")
+                                (fun () -> $"a: %A{a} / b: %A{b}")
+                            match a |> Map.tryPick (fun (_, k) v -> if k = b then Some v else None) with
                             | Some x -> r', x
                             | _ -> raise (TypeErrorException [r, RecordIndexFailed b])
                         | b -> raise (TypeErrorException [r', ExpectedSymbol' b])
@@ -1466,18 +1507,22 @@ let infer package_id module_id (top_env' : TopEnv) expr =
                 | TyRecord l' as s ->
                     let l, missing =
                         List.mapFoldBack (fun (a,b) missing ->
-                            match Map.tryFind a l' with
+                            // match Map.tryFind a l' with
+                            match l' |> Map.tryPick (fun (i, k) v -> if k = a then Some v else None) with
                             | Some x -> (x,b), missing
                             | None -> (fresh_var scope,b), a :: missing
                             ) l []
                     if List.isEmpty missing = false then errors.Add(r, MissingRecordFieldsInPattern(s, missing))
                     List.fold (fun env (a,b) -> loop env a b) (scope, env) l
                 | s ->
-                    let l, env =
-                        List.mapFold (fun env (a,b) ->
+                    let l, (env, _i) =
+                        List.mapFold (fun (env, i) (a,b) ->
+                            trace Debug
+                                (fun () -> $"Infer.infer / s / List.mapFold")
+                                (fun () -> $"a: %A{a} / b: {b} / i: {i}")
                             let v = fresh_var scope
-                            (a, v), loop env v b
-                            ) (scope, env) l
+                            (((i, a), v), (loop env v b, i + 1))
+                            ) ((scope, env), 0) l
                     unify r s (l |> Map |> TyRecord)
                     env
             | PatExists(r,l,p) ->

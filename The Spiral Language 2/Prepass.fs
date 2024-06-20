@@ -2,6 +2,7 @@ module Spiral.PartEval.Prepass
 open Spiral
 open VSCTypes
 open Spiral.Infer
+open Polyglot.Common
 
 type Id = int32
 type ScopeEnv = {|free_vars : int []; stack_size : int|}
@@ -93,7 +94,7 @@ and [<ReferenceEquality>] T =
     | TPair of Range * T * T
     | TFun of Range * T * T
     | TFunPtr of Range * T * T
-    | TRecord of Range * Map<string,T>
+    | TRecord of Range * Map<int * string,T>
     | TModule of Map<string,T>
     | TUnion of Range * (Map<int * string,T> * BlockParsing.UnionLayout)
     | TSymbol of Range * string
@@ -191,7 +192,7 @@ module Printable =
         | TPair of PT * PT
         | TFun of PT * PT
         | TFunPtr of PT * PT
-        | TRecord of Map<string,PT>
+        | TRecord of Map<int * string,PT>
         | TModule of Map<string,PT>
         | TUnion of Map<int * string,PT> * BlockParsing.UnionLayout
         | TSymbol of string
@@ -459,7 +460,8 @@ let propagate x =
         | TMetaV i -> {empty with ty = {|empty.ty with range = Some(i,i)|} }
         | TApply(_,a,b) | TPair(_,a,b) | TFun(_,a,b) | TFunPtr(_,a,b) -> ty a + ty b
         | TUnion(_,(a,_)) -> Map.fold (fun s k v -> s + ty v) empty a
-        | TRecord(_,a) | TModule a -> Map.fold (fun s k v -> s + ty v) empty a
+        | TModule a -> Map.fold (fun s k v -> s + ty v) empty a
+        | TRecord(_,a) -> Map.fold (fun s k v -> s + ty v) empty a
         | TTerm(_,a) -> term a
         | TMacro(_,a) -> a |> List.fold (fun s -> function TMText _ -> s | TMLitType x | TMType x -> s + ty x) empty
         | TArrow(i,a) as x -> scope x (ty a -. i)
@@ -556,7 +558,8 @@ let resolve (scope : Dictionary<obj,PropagatedVars>) x =
         | TPatternRef a -> f !a
         | TArrow(_,a) -> subst env x; f a
         | TApply(_,a,b) | TFun(_,a,b) | TFunPtr(_,a,b) | TPair(_,a,b) -> f a; f b
-        | TRecord(_,a) | TModule a -> Map.iter (fun _ -> f) a
+        | TModule a -> Map.iter (fun _ -> f) a
+        | TRecord(_,a) -> Map.iter (fun _ -> f) a
         | TUnion(_,(a,_)) -> Map.iter (fun _ -> f) a
         | TTerm(_,a) -> term env a
         | TMacro(_,a) -> a |> List.iter (function TMText _ -> () | TMLitType a | TMType a -> f a)
@@ -971,7 +974,11 @@ let prepass package_id module_id path (top_env : PrepassTopEnv) =
         | RawTApply(r,a,b) ->
             match f a, f b with
             | TRecord(_,a') & a, TSymbol(_,b') & b ->
-                match Map.tryFind b' a' with
+                trace Debug
+                    (fun () -> $"Prepass.ty' / RawTApply / TRecord | TSymbol")
+                    (fun () -> $"a': %A{a'} / b': %A{b'} / r: %A{r}")
+
+                match a' |> Map.tryPick (fun (_, k) v -> if k = b' then Some v else None) with
                 | Some x -> x
                 | None -> TApply(p r,a,b) // TODO: Will be an error during partial evaluation time. Could be substituted for an exception here, but I do not want to have errors during the prepass.
             | a,b -> TApply(p r,a,b)
