@@ -11,6 +11,7 @@ open Spiral.PartEval.Prepass
 open Spiral.HashConsing
 open SoftCircuits.Collections
 open Polyglot.Common
+open Lib
 
 type Tag = int
 type [<CustomComparison;CustomEquality>] L<'a,'b when 'a: equality and 'a: comparison> =
@@ -707,7 +708,7 @@ let peval (env : TopEnv) (x : E) =
             YRecord(
                 a
                 |> Seq.map (fun (KeyValue (k, v)) ->
-                    trace Debug
+                    trace Verbose
                         (fun () -> $"PartEval.peval / ty / TModule")
                         (fun () -> $"k: %A{k} / v: %A{v} / a.Count: {a.Count}")
 
@@ -736,9 +737,9 @@ let peval (env : TopEnv) (x : E) =
             | YRecord a ->
                 match ty s b with
                 | YSymbol b ->
-                    trace Debug
+                    trace Verbose
                         (fun () -> $"PartEval.peval / TApply / YRecord | YSymbol")
-                        (fun () -> $"a: %A{a} / b: %A{b} / r: %A{r}")
+                        (fun () -> $"a: %A{a |> FSharp.Json.Json.serialize |> SpiralSm.ellipsis_end 200} / b: %A{b} / r: %A{r |> FSharp.Json.Json.serialize |> SpiralSm.ellipsis_end 200}")
                     match a |> Map.tryPick (fun (_, k) v -> if k = b then Some v else None) with
                     | Some x -> x
                     | None -> raise_type_error s <| sprintf  "Cannot find key %s in the record." b
@@ -785,9 +786,9 @@ let peval (env : TopEnv) (x : E) =
             | DNominal(DUnion _,_), _ -> raise_type_error s "Unions cannot be applied."
             | DNominal(a,_), b -> apply s (a,b)
             | DRecord a, DSymbol b ->
-                trace Debug
+                trace Verbose
                     (fun () -> $"PartEval.peval / apply / DRecord | DSymbol")
-                    (fun () -> $"a: %A{a} / b: %A{b}")
+                    (fun () -> $"a: {a |> FSharp.Json.Json.serialize |> SpiralSm.ellipsis_end 200} / b: %A{b}")
                 match a |> Map.tryPick (fun (_, k) v -> if k = b then Some v else None) with
                 | Some a -> a
                 | None -> raise_type_error s <| sprintf "Cannot find the key %s inside the record." b
@@ -812,9 +813,9 @@ let peval (env : TopEnv) (x : E) =
                 let ret_ty =
                     match ty with
                     | YRecord r ->
-                        trace Debug
+                        trace Verbose
                             (fun () -> $"PartEval.peval / apply / DV(L(i,YLayout(ty,layout)) as tyv) as a, DSymbol b")
-                            (fun () -> $"a: %A{a} / b: %A{b}")
+                            (fun () -> $"a: %A{a |> FSharp.Json.Json.serialize |> SpiralSm.ellipsis_end 200} / b: %A{b}")
                         match r |> Map.tryPick (fun (i, k) v -> if k = b then Some (i,v) else None) with
                         | Some (_i, a) -> a
                         | None -> raise_type_error s <| sprintf "Cannot find the key %s inside the layout type's record." b
@@ -843,6 +844,35 @@ let peval (env : TopEnv) (x : E) =
                         cse
                     let tr, type_tr = term_scope' s (add_rewrite_cases true) on_succ
                     let fl, type_fl = term_scope' s (add_rewrite_cases false) on_fail
+                    let type_tr, type_fl =
+                        match type_tr, type_fl with
+                        | YRecord tr, YRecord fl ->
+                            let tr =
+                                tr
+                                |> Seq.map (fun (KeyValue ((i, k), v)) ->
+                                    let i =
+                                        fl |> Map.tryPick (fun (i', k') _ -> if k = k' then Some i' else None)
+                                        |> Option.defaultValue i
+                                    (i, k), v
+                                )
+                                |> Map.ofSeq
+                                |> YRecord
+
+                            let fl =
+                                fl
+                                |> Seq.map (fun (KeyValue ((i, k), v)) ->
+                                    k, ((i, k), v)
+                                )
+                                |> Seq.distinctBy fst
+                                |> Seq.map snd
+                                |> Map.ofSeq
+                                |> YRecord
+
+                            tr, fl
+
+                        | _ ->
+                            type_tr, type_fl
+
                     if type_tr = type_fl then
                         if tr.Length = 1 && fl.Length = 1 then
                             match tr.[0], fl.[0] with
@@ -945,6 +975,19 @@ let peval (env : TopEnv) (x : E) =
                 | _ -> raise_type_error s <| sprintf "Expected key/value pair.\nGot: %s" (show_data a)
             | b' ->
                 let a_ty = data_to_ty s a
+                let a_ty =
+                    match a_ty with
+                    | YRecord a ->
+                        a
+                        |> Seq.map (fun (KeyValue ((i, k), v)) ->
+                            k, ((i, k), v)
+                        )
+                        |> Seq.distinctBy fst
+                        |> Seq.map snd
+                        |> Map.ofSeq
+                        |> YRecord
+                    | _ -> a_ty
+
                 if a_ty = b' then DNominal(a,b)
                 else raise_type_error s <| sprintf "Type error in nominal constructor.\nGot: %s\nExpected: %s" (show_ty a_ty) (show_ty b')
 
@@ -1047,7 +1090,7 @@ let peval (env : TopEnv) (x : E) =
                     | a -> raise_type_error (add_trace s r) <| sprintf "Expected a symbol.\nGot: %s" (show_data a)
                 x |> fold (fun m x ->
                     let sym a b =
-                        trace Debug
+                        trace Verbose
                             (fun () -> $"PartEval.peval / ERecordWith / sym")
                             (fun () -> $"a: %A{a} / b: %A{b}")
                         Map.add (m |> Map.count, a) (term s b) m
@@ -1139,6 +1182,22 @@ let peval (env : TopEnv) (x : E) =
                     | a -> raise_type_error (add_trace s r) <| sprintf "Expected a record.\nGot: %s" (show_ty a)
                     ) (r,a_ty) b |> snd
             let c = term s c |> dyn false s
+            let c =
+                match c with
+                | DRecord c ->
+                    c
+                    |> Seq.map (fun (KeyValue ((i, k), v)) ->
+                        let i =
+                            match c_ty with
+                            | YRecord a ->
+                                a |> Map.tryPick (fun (i', k') _ -> if k = k' then Some i' else None)
+                            | _ -> None
+                            |> Option.defaultValue i
+                        (i, k), v
+                    )
+                    |> Map.ofSeq
+                    |> DRecord
+                | _ -> c
             if data_to_ty s c = c_ty then push_typedop_no_rewrite s (TyLayoutHeapMutableSet(a,List.map snd b,c)) YB
             else raise_type_error s <| sprintf "The two side do not have the same type.\nGot: %s\nExpected: %s" (show_ty a_ty) (show_ty c_ty)
         | EMacro(r,a,b) ->
@@ -1340,7 +1399,7 @@ let peval (env : TopEnv) (x : E) =
                 let rec loop = function
                     | x :: x' ->
                         let sym a b =
-                            trace Debug
+                            trace Verbose
                                 (fun () -> $"PartEval.peval / ERecordTest(r,a,bind,on_succ,on_fail) / DRecord")
                                 (fun () -> $"a: %A{a} / b: %A{b}")
                             match l |> Map.tryPick (fun (_, k) v -> if k = a then Some v else None) with
@@ -1384,7 +1443,12 @@ let peval (env : TopEnv) (x : E) =
                     | YPair(a,b), YPair(a',b') -> f (a,a') && f (b,b')
                     | YSymbol a, YSymbol b -> a = b
                     | YTypeFunction(a,b,c,d), YTypeFunction(a',b',c',d') -> a = a' && Array.forall2 (fun b b' -> f (b,b')) b b' && c = c' && d = d'
-                    | YRecord a, YRecord a' -> Map.forall (fun k v' -> match Map.tryFind k a with Some v -> f (v, v') | None -> false) a'
+                    | YRecord a, YRecord a' ->
+                        Map.forall (fun (_i, k) v' ->
+                            match a |> Map.tryPick (fun (_i', k') v -> if k' = k then Some v else None) with
+                            | Some v -> f (v,v')
+                            | None -> false
+                        ) a'
                     | YPrim a, YPrim a' -> a = a'
                     | YArray a, YArray a' -> f (a, a')
                     | YMacro a, YMacro a' ->
@@ -1617,12 +1681,10 @@ let peval (env : TopEnv) (x : E) =
             DB
         | EOp(_,RecordTypeFold,[f;state;EType(_,x)]) ->
             let f,state,l = term s f, term s state, ty_record s x
-            let l = l |> Seq.map (fun (KeyValue ((i, k), v)) -> k, v) |> Map.ofSeq
-            Map.fold (fun state k v -> type_apply s (apply s ((apply s (f, state), DSymbol k))) v) state l
+            Map.fold (fun state (_, k) v -> type_apply s (apply s ((apply s (f, state), DSymbol k))) v) state l
         | EOp(_,RecordTypeFoldBack,[f;state;EType(_,x)]) ->
             let f,state,l = term s f, term s state, ty_record s x
-            let l = l |> Seq.map (fun (KeyValue ((i, k), v)) -> k, v) |> Map.ofSeq
-            Map.foldBack (fun k v state -> apply s ((type_apply s (apply s (f, DSymbol k)) v), state)) l state
+            Map.foldBack (fun (_, k) v state -> apply s ((type_apply s (apply s (f, DSymbol k)) v), state)) l state
         | EOp(_,RecordTypeLength,[EType(_,a)]) ->
             Map.count (ty_record s a) |> LitInt32 |> DLit
         | EOp(_,RecordTypeTryFind,[EType(_,a);k;on_succ;on_fail]) ->
@@ -1633,7 +1695,7 @@ let peval (env : TopEnv) (x : E) =
                 | None -> apply s (term s on_fail, DB)
             | _, k -> raise_type_error s <| sprintf "Expected a symbol.\nGot: %s" (show_data k)
         | EOp(_,UnionToRecord,[EType(_,a);on_succ]) ->
-            type_apply s (term s on_succ) (YRecord ((ty_union s a).Item.cases))
+            type_apply s (term s on_succ) (YRecord (ty_union s a).Item.cases)
         | EOp(_,Add,[a;b]) ->
             let inline op a b = a + b
             match term2 s a b with

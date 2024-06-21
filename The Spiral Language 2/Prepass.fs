@@ -974,7 +974,7 @@ let prepass package_id module_id path (top_env : PrepassTopEnv) =
         | RawTApply(r,a,b) ->
             match f a, f b with
             | TRecord(_,a') & a, TSymbol(_,b') & b ->
-                trace Debug
+                trace Verbose
                     (fun () -> $"Prepass.ty' / RawTApply / TRecord | TSymbol")
                     (fun () -> $"a': %A{a'} / b': %A{b'} / r: %A{r}")
 

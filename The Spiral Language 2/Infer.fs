@@ -935,7 +935,14 @@ let infer package_id module_id (top_env' : TopEnv) expr =
             let record l l' =
                 let a,b = Map.toArray l, Map.toArray l'
                 if a.Length <> b.Length then er ()
-                else Array.iter2 (fun (ka,a) (kb,b) -> if ka = kb then loop (a,b) else er()) a b
+                else
+                    let a = a |> Array.sortBy (fun ((_,k),_) -> k)
+                    let b = b |> Array.sortBy (fun ((_,k),_) -> k)
+                    Array.iter2 (fun (ka,a) (kb,b) ->
+                        if (ka |> snd) = (kb |> snd)
+                        then loop (a,b)
+                        else er()
+                    ) a b
             match visit_t a'', visit_t b'' with
             | TyComment(_,a), b | a, TyComment(_,b) -> loop (a,b)
             | TyMetavar(a,link), TyMetavar(b,_) & b' ->
@@ -984,7 +991,7 @@ let infer package_id module_id (top_env' : TopEnv) expr =
     let apply_record r s l x =
         match visit_t x with
         | TySymbol x ->
-            trace Debug
+            trace Verbose
                 (fun () -> $"Infer.infer / apply_record / TySymbol")
                 (fun () -> $"x: %A{x}")
             match l |> Map.tryPick (fun (_, k) v -> if k = x then Some v else None) with
@@ -1153,7 +1160,7 @@ let infer package_id module_id (top_env' : TopEnv) expr =
                             match m |> Map.tryPick (fun (i, k) v -> if k = x.symbol then Some (i, v) else None) with
                             | Some q ->
                                 if x.symbol = "trace_file" then
-                                    trace Debug
+                                    trace Verbose
                                         (fun () -> $"Infer.infer / eval modify")
                                         (fun () -> $"m.Count: %A{m.Count} / x.symbol: {x.symbol} / q: %A{q}")
                                 q
@@ -1164,7 +1171,7 @@ let infer package_id module_id (top_env' : TopEnv) expr =
                         Map.add (i, x.symbol) w m
                     else
                         f x.var x.body
-                        trace Debug
+                        trace Verbose
                             (fun () -> $"Infer.infer / eval modify")
                             (fun () -> $"m.Count: %A{m.Count} / x.symbol: {x.symbol} / q: %A{q}")
                         let i =
@@ -1193,7 +1200,7 @@ let infer package_id module_id (top_env' : TopEnv) expr =
                     | TySymbol k ->
                         match m |> Map.tryPick (fun (i, k') v -> if k' = k then Some (i, v) else None) with
                         | Some (i, m) ->
-                            trace Debug
+                            trace Verbose
                                 (fun () -> $"Infer.infer / tail'")
                                 (fun () -> $"i: %A{i} / k: {k}")
                             match visit_t m with
@@ -1218,7 +1225,7 @@ let infer package_id module_id (top_env' : TopEnv) expr =
                             s |> Map.tryPick (fun (i, k') v -> if k' = k then Some (i, v) else None)
                         with
                         | Some (i,m), Some (_i',s) ->
-                            trace Debug
+                            trace Verbose
                                 (fun () -> $"Infer.infer / tail")
                                 (fun () -> $"i: %A{i} / _i': {_i'}")
                             match visit_t m, visit_t s with
@@ -1291,7 +1298,7 @@ let infer package_id module_id (top_env' : TopEnv) expr =
                     | TyRecord a ->
                         match b' with
                         | TySymbol b ->
-                            trace Debug
+                            trace Verbose
                                 (fun () -> $"Infer.infer / apply / RawHeapMutableSet(r,a,b,c)")
                                 (fun () -> $"a: %A{a} / b: %A{b}")
                             match a |> Map.tryPick (fun (_, k) v -> if k = b then Some v else None) with
@@ -1508,12 +1515,12 @@ let infer package_id module_id (top_env' : TopEnv) expr =
                     let l, missing =
                         List.mapFoldBack (fun (a,b) missing ->
                             // match Map.tryFind a l' with
-                            match l' |> Map.tryPick (fun (i, k) v -> if k = a then Some v else None) with
+                            match l' |> Map.tryPick (fun (i, k) v -> if k = a then Some (i, v) else None) with
                             | Some x -> (x,b), missing
-                            | None -> (fresh_var scope,b), a :: missing
+                            | None -> ((0, fresh_var scope),b), a :: missing
                             ) l []
                     if List.isEmpty missing = false then errors.Add(r, MissingRecordFieldsInPattern(s, missing))
-                    List.fold (fun env (a,b) -> loop env a b) (scope, env) l
+                    List.fold (fun env ((i,a),b) -> loop env a b) (scope, env) l
                 | s ->
                     let l, (env, _i) =
                         List.mapFold (fun (env, i) (a,b) ->
