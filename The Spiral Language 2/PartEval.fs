@@ -707,12 +707,12 @@ let peval (env : TopEnv) (x : E) =
         | TModule a ->
             YRecord(
                 a
-                |> Seq.map (fun (KeyValue (k, v)) ->
+                |> Seq.mapi (fun i (KeyValue (k, v)) ->
                     trace Verbose
                         (fun () -> $"PartEval.peval / ty / TModule")
                         (fun () -> $"k: %A{k} / v: %A{v} / a.Count: {a.Count}")
 
-                    (a.Count, k), (v |> ty s)
+                    (i, k), (v |> ty s)
                 )
                 |> Map.ofSeq
             )
@@ -1093,7 +1093,11 @@ let peval (env : TopEnv) (x : E) =
                         trace Verbose
                             (fun () -> $"PartEval.peval / ERecordWith / sym")
                             (fun () -> $"a: %A{a} / b: %A{b}")
-                        Map.add (m |> Map.count, a) (term s b) m
+                        let i =
+                            m
+                            |> Map.tryPick (fun (i, k) _v -> if k = a then Some i else None)
+                            |> Option.defaultValue m.Count
+                        Map.add (i, a) (term s b) m
                     let sym_mod r a b =
                         match m |> Map.tryPick (fun (i, k) v -> if k = a then Some (i, v) else None) with
                         | Some (i, a') -> Map.add (i, a) (apply s (term s b, a')) m
@@ -1634,13 +1638,13 @@ let peval (env : TopEnv) (x : E) =
             | a -> raise_type_error s <| sprintf "Expected an array_base.\nGot: %s" (show_data a)
         | EOp(_,RecordMap,[a;b]) ->
             match term2 s a b with
-            | a, DRecord l -> Map.map (fun (i, k) v -> apply s (a, record2 ((i, "key"), DSymbol k) (((i + 1), "value"), v))) l |> DRecord
+            | a, DRecord l -> Map.map (fun (_i, k) v -> apply s (a, record2 ((l.Count, "key"), DSymbol k) (((l.Count + 1), "value"), v))) l |> DRecord
             | _, b -> raise_type_error s <| sprintf "Expected a record.\nGot: %s" (show_data b)
         | EOp(_,RecordIter,[a;b]) ->
             match term2 s a b with
             | a, DRecord l ->
                 Map.iter (fun (i,k) v ->
-                    match apply s (a, record2 ((i, "key"), DSymbol k) (((i + 1), "value"), v)) with
+                    match apply s (a, record2 ((l.Count, "key"), DSymbol k) (((l.Count + 1), "value"), v)) with
                     | DB -> ()
                     | x -> raise_type_error s <| sprintf "Expected an unit value.\nGot: %s" (show_data x)
                     ) l
@@ -1649,8 +1653,8 @@ let peval (env : TopEnv) (x : E) =
         | EOp(_,RecordFilter,[a;b]) ->
             match term2 s a b with
             | a, DRecord l ->
-                Map.filter (fun (i,k) v ->
-                    match apply s (a, record2 ((i, "key"), DSymbol k) (((i + 1), "value"), v)) with
+                Map.filter (fun (_i,k) v ->
+                    match apply s (a, record2 ((l.Count, "key"), DSymbol k) (((l.Count + 1), "value"), v)) with
                     | DLit(LitBool x) -> x
                     | x -> raise_type_error s <| sprintf "Expected a bool literal.\nGot: %s" (show_data x)
                     ) l
@@ -1658,11 +1662,11 @@ let peval (env : TopEnv) (x : E) =
             | _, b -> raise_type_error s <| sprintf "Expected a record.\nGot: %s" (show_data b)
         | EOp(_,RecordFold,[a;b;c]) ->
             match term3 s a b c with
-            | a, state, DRecord l -> Map.fold (fun state (i,k) v -> apply s (a, record3 ((i, "state"), state) (((i + 1), "key"), DSymbol k) (((i + 2), "value"), v))) state l
+            | a, state, DRecord l -> Map.fold (fun state (i,k) v -> apply s (a, record3 ((l.Count, "state"), state) (((l.Count + 1), "key"), DSymbol k) (((l.Count + 2), "value"), v))) state l
             | _, _, r -> raise_type_error s <| sprintf "Expected a record.\nGot: %s" (show_data r)
         | EOp(_,RecordFoldBack,[a;b;c]) ->
             match term3 s a b c with
-            | a, state, DRecord l -> Map.foldBack (fun (i,k) v state -> apply s (a, record3 ((i, "state"), state) (((i + 1), "key"), DSymbol k) (((i + 2), "value"), v))) l state
+            | a, state, DRecord l -> Map.foldBack (fun (i,k) v state -> apply s (a, record3 ((i, "state"), state) (((l.Count + 1), "key"), DSymbol k) (((l.Count + 2), "value"), v))) l state
             | _, _, r -> raise_type_error s <| sprintf "Expected a record.\nGot: %s" (show_data r)
         | EOp(_,RecordLength,[a]) ->
             match term s a with
