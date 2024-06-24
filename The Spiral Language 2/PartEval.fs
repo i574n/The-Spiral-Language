@@ -645,7 +645,7 @@ let peval (env : TopEnv) (x : E) =
                 |> Seq.map (fun (KeyValue ((i, k), v)) ->
                     let i =
                         match fun_ty with
-                        | Some (YFun (YNominal _, YRecord a)) ->
+                        | Some (YFun (YNominal _, YRecord a, _)) ->
                             a |> Map.tryPick (fun (i', k') _ -> if k = k' then Some i' else None)
                         | _ -> None
                         |> Option.defaultValue i

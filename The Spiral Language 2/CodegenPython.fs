@@ -306,7 +306,7 @@ let codegen' backend_handler (env : PartEvalResult) (x : TypedBind []) =
         | TyFailwith(a,b) -> line s $"raise Exception({tup_data' b})"
         | TyConv(a,b) -> return' $"{tyv a}({tup_data b})"
         | TyApply(L(i,_),b) -> return' $"v{i}({tup_data' b})"
-        | TyArrayLength(a,b) -> return' $"{tup_data b}.size"
+        | TyArrayLength(a,b) -> return' $"{tup_data b}.__len__()"
         | TyStringLength(a,b) -> return' $"len({tup_data b})"
         | TyOp(Global,[DLit (LitString x)]) -> global' x
         | TyOp(op,l) ->

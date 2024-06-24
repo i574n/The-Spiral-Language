@@ -32,7 +32,7 @@ type BindsReturn =
 let term_vars_to_tys x = x |> Array.map (function WV(L(_,t)) -> t | WLit x -> YPrim (lit_to_primitive_type x))
 let binds_last_data x = x |> Array.last |> function TyLocalReturnData(x,_) | TyLocalReturnOp(_,_,x) -> x | TyLet _ -> raise_codegen_error "Compiler error: Cannot find the return data of the last bind."
 
-type LayoutRec = {tag : int; data : Data; free_vars : TyV[]; free_vars_by_key : Map<string, TyV[]>}
+type LayoutRec = {tag : int; data : Data; free_vars : TyV[]; free_vars_by_key : Map<int * string, TyV[]>}
 type UnionRec = {tag : int; free_vars : Map<int * string, TyV[]>; is_heap : bool}
 type MethodRec = {tag : int; free_vars : TyV[]; range : Ty; body : TypedBind[]; name : string option}
 type ClosureRec = {tag : int; free_vars : TyV[]; domain : Ty; range : Ty; funtype : FunType; body : TypedBind[]}
@@ -427,9 +427,15 @@ let codegen (default_env : Startup.DefaultEnv) (globals : _ ResizeArray, fwd_dcl
             let tag = (mut b).tag
             $"sptr<Mut{tag}>{{new Mut{tag}{{{args' a}}}}}" |> return'
         | TyLayoutIndexAll(x) -> match x with L(i,YLayout(a,lay)) -> (match lay with Heap -> heap a | HeapMutable -> mut a).free_vars |> layout_index i | _ -> failwith "Compiler error: Expected the TyV in layout index to be a layout type."
-        | TyLayoutIndexByKey(x,key) -> match x with L(i,YLayout(a,lay)) -> (match lay with Heap -> heap a | HeapMutable -> mut a).free_vars_by_key.[key] |> layout_index i | _ -> failwith "Compiler error: Expected the TyV in layout index by key to be a layout type."
+        | TyLayoutIndexByKey(x,key) -> match x with L(i,YLayout(a,lay)) -> (match lay with Heap -> heap a | HeapMutable -> mut a).free_vars_by_key |> Map.pick (fun (_i, k) v -> if key = k then Some v else None) |> layout_index i | _ -> failwith "Compiler error: Expected the TyV in layout index by key to be a layout type."
         | TyLayoutHeapMutableSet(L(i,t),b,c) ->
-            let a = List.fold (fun s k -> match s with DRecord l -> l.[k] | _ -> raise_codegen_error "Compiler error: Expected a record.") (mut t).data b
+            let a =
+                List.fold
+                    (fun s k ->
+                        match s with
+                        | DRecord l -> l |> Map.pick (fun (_, k') v' -> if k = k' then Some v' else None)
+                        | _ -> raise_codegen_error "Compiler error: Expected a record.")
+                    (mut t).data b
             Array.map2 (fun (L(i',_)) b -> $"v{i}.base->v{i'} = {show_w b};") (data_free_vars a) (data_term_vars c)
             |> String.concat " " |> line s
         | TyArrayLiteral(a,b') -> raise_codegen_error "Compiler error: TyArrayLiteral should have been taken care of in TyLet."
@@ -746,7 +752,6 @@ let codegen (default_env : Startup.DefaultEnv) (globals : _ ResizeArray, fwd_dcl
                     line s_typ $"this->tag = {max_tag};"
                 line s_typ "}"
             line s_typ "};"
-            map_iteri (fun tag (_, k) v -> 
             )
     and layout_tmpl name : _ -> LayoutRec =
         layout (fun s_fwd s_typ s_fun (x : LayoutRec) ->
