@@ -11,8 +11,6 @@ open System
 open System.Text
 open System.Collections.Generic
 
-type PythonBackendType = Cuda
-
 let private backend_name = "Python"
 
 let lit = function
@@ -101,7 +99,7 @@ type BindsReturn =
 
 let line x s = if s <> "" then x.text.Append(' ', x.indent).AppendLine s |> ignore
 
-let codegen'' backend_handler (env : PartEvalResult) (x : TypedBind []) =
+let codegen' backend_handler (env : PartEvalResult) (x : TypedBind []) =
     let globals = ResizeArray()
     let fwd_dcls = ResizeArray()
     let types = ResizeArray()
@@ -207,7 +205,7 @@ let codegen'' backend_handler (env : PartEvalResult) (x : TypedBind []) =
         | YMacro a -> a |> List.map (function Text a -> a | Type a -> tup_ty a | TypeLit a -> type_lit a) |> String.concat ""
         | YPrim a -> prim a
         | YArray a -> "cp.ndarray"
-        | YFun(a,b) -> 
+        | YFun(a,b,FT_Vanilla) -> 
             let a = env.ty_to_data a |> data_free_vars |> Array.map (fun (L(_,t)) -> tyv t) |> String.concat ", "
             $"Callable[[{a}], {tup_ty b}]"
         | YExists -> raise_codegen_error "Existentials are not supported at runtime. They are a compile time feature only."
@@ -411,11 +409,11 @@ let codegen'' backend_handler (env : PartEvalResult) (x : TypedBind []) =
     and closure : _ -> ClosureRec =
         jp true (fun ((jp_body,key & (C(args,_,fun_ty))),i) ->
             match fun_ty with
-            | YFun(domain,range) ->
+            | YFun(domain,range,FT_Vanilla) ->
                 match (fst env.join_point_closure.[jp_body]).[key] with
                 | Some(domain_args, body) -> {tag=i; free_vars=rdata_free_vars args; domain=domain; domain_args=data_free_vars domain_args; range=range; body=body}
                 | _ -> raise_codegen_error "Compiler error: The method dictionary is malformed"
-            | YFunPtr _ -> raise_codegen_error "Function pointers are not supported in the Python backend."
+            | YFun _ -> raise_codegen_error "Non-standard functions are not supported in the Python backend."
             | _ -> raise_codegen_error "Compiler error: Unexpected type in the closure join point."
             ) (fun s x ->
             let env_args = x.free_vars |> Array.map (fun (L(i,t)) -> $"env_v{i} : {tyv t}") |> String.concat ", "
@@ -454,48 +452,34 @@ let codegen'' backend_handler (env : PartEvalResult) (x : TypedBind []) =
     functions |> Seq.iter (fun x -> program.Append(x) |> ignore)
     program.Append(main).ToString()
 
-let codegen' backend_type env x = 
-    match backend_type with
-    | Cuda ->
-        let cuda_kernels = StringBuilder().AppendLine("kernel = r\"\"\"")
-        let g = Dictionary(HashIdentity.Structural)
-        let globals, fwd_dcls, types, functions, main_defs as ars = ResizeArray(), ResizeArray(), ResizeArray(), ResizeArray(), ResizeArray()
+let codegen (default_env : Startup.DefaultEnv) env x = 
+    let cuda_kernels = StringBuilder().AppendLine("kernel = r\"\"\"")
+    let g = Dictionary(HashIdentity.Structural)
+    let globals, fwd_dcls, types, functions, main_defs as ars = ResizeArray(), ResizeArray(), ResizeArray(), ResizeArray(), ResizeArray()
 
-        let codegen = Cuda.codegen ars env
-        let python_code =
-            codegen'' (fun (jp_body,key,r') ->
-                let backend_name = (fst jp_body).node
-                match backend_name with
-                | "Cuda" -> 
-                    Utils.memoize g (fun (jp_body,key & (C(args,_))) ->
-                        let args = rdata_free_vars args
-                        match (fst env.join_point_method.[jp_body]).[key] with
-                        | Some a, Some _, _ -> codegen args a
-                        | _ -> raise_codegen_error "Compiler error: The method dictionary is malformed"
-                        string g.Count
-                        ) (jp_body,key)
-                | x -> raise_codegen_error_backend r' $"The Python + Cuda backend does not support the {x} backend."
-                ) env x
+    let codegen = Cuda.codegen default_env ars env
+    let python_code =
+        codegen' (fun (jp_body,key,r') ->
+            let backend_name = (fst jp_body).node
+            match backend_name with
+            | "Cuda" -> 
+                Utils.memoize g (fun (jp_body,key & (C(args,_))) ->
+                    let args = rdata_free_vars args
+                    match (fst env.join_point_method.[jp_body]).[key] with
+                    | Some a, Some _, _ -> codegen args a
+                    | _ -> raise_codegen_error "Compiler error: The method dictionary is malformed"
+                    string g.Count
+                    ) (jp_body,key)
+            | x -> raise_codegen_error_backend r' $"The Python + Cuda backend does not support the {x} backend."
+            ) env x
 
-        globals |> Seq.iter (fun x -> cuda_kernels.AppendLine(x) |> ignore)
-        fwd_dcls |> Seq.iter (fun x -> cuda_kernels.Append(x) |> ignore)
-        types |> Seq.iter (fun x -> cuda_kernels.Append(x) |> ignore)
-        functions |> Seq.iter (fun x -> cuda_kernels.Append(x) |> ignore)
-        main_defs |> Seq.iter (fun x -> cuda_kernels.Append(x) |> ignore)
+    globals |> Seq.iter (fun x -> cuda_kernels.AppendLine(x) |> ignore)
+    fwd_dcls |> Seq.iter (fun x -> cuda_kernels.Append(x) |> ignore)
+    types |> Seq.iter (fun x -> cuda_kernels.Append(x) |> ignore)
+    functions |> Seq.iter (fun x -> cuda_kernels.Append(x) |> ignore)
+    main_defs |> Seq.iter (fun x -> cuda_kernels.Append(x) |> ignore)
 
-        cuda_kernels
-            .AppendLine("\"\"\"")
-            .AppendLine("""
-class static_array(list):
-    def __init__(self, length):
-        for _ in range(length):
-            self.append(None)
-
-class static_array_list(static_array):
-    def __init__(self, length):
-        super().__init__(length)
-        self.length = 0
-        """.Trim())
-            .Append(python_code).ToString()
-
-let codegen_cuda env x = codegen' Cuda env x
+    cuda_kernels
+        .AppendLine("\"\"\"")
+        .AppendLine(IO.File.ReadAllText(IO.Path.Join(AppDomain.CurrentDomain.BaseDirectory, "reference_counting.py")))
+        .Append(python_code).ToString()

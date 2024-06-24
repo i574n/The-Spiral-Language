@@ -1,4 +1,4 @@
-﻿module Spiral.Codegen.Cuda
+module Spiral.Codegen.Cuda
 
 open Spiral
 open Spiral.Utils
@@ -12,14 +12,9 @@ open System.Text
 open System.Collections.Generic
 
 let private backend_name = "Cuda"
+let private max_tag = 255uy
 
 let is_string = function DV(L(_,YPrim StringT)) | DLit(LitString _) -> true | _ -> false
-// The number of bits needed to represent an union type with an x number of cases.
-// Strictly speaking it should be x * 2 - 1, but we do it like this to give 1 bit of extra wiggle room for the 2,4,8,16 (pow of 2) cases
-// because of how TyUnionUnbox is being compiled. For those particular cases we need to have the -1 to have an extra bit of information.
-// Note: This was how it was compiled in the HLS backend, but in the Cuda C++ one the tag field should get padded up to its full value either way.
-let num_bits_needed_to_represent (x : int) = Numerics.BitOperations.Log2(x * 2 |> uint) |> max 1
-
 let sizeof_tyv = function
     | YPrim (Int64T | UInt64T | Float64T) -> 8
     | YPrim (Int32T | UInt32T | Float32T) -> 4
@@ -37,11 +32,12 @@ type BindsReturn =
 let term_vars_to_tys x = x |> Array.map (function WV(L(_,t)) -> t | WLit x -> YPrim (lit_to_primitive_type x))
 let binds_last_data x = x |> Array.last |> function TyLocalReturnData(x,_) | TyLocalReturnOp(_,_,x) -> x | TyLet _ -> raise_codegen_error "Compiler error: Cannot find the return data of the last bind."
 
-type UnionRec = {tag : int; free_vars : Map<int * string, TyV[]>}
-type MethodRec = {tag : int; free_vars : L<Tag,Ty>[]; range : Ty; body : TypedBind[]; name : string option}
-type ClosureRec = {tag : int; domain : Ty; range : Ty; body : TypedBind[]}
+type LayoutRec = {tag : int; data : Data; free_vars : TyV[]; free_vars_by_key : Map<string, TyV[]>}
+type UnionRec = {tag : int; free_vars : Map<int * string, TyV[]>; is_heap : bool}
+type MethodRec = {tag : int; free_vars : TyV[]; range : Ty; body : TypedBind[]; name : string option}
+type ClosureRec = {tag : int; free_vars : TyV[]; domain : Ty; range : Ty; funtype : FunType; body : TypedBind[]}
 type TupleRec = {tag : int; tys : Ty []}
-type CFunRec = {tag : int; domain : Ty; range : Ty}
+type CFunRec = {tag : int; domain : Ty; range : Ty; funtype : FunType}
 
 //let size_t = UInt32T
 
@@ -67,7 +63,7 @@ let lit_string x =
     strb.Append '"' |> ignore
     strb.ToString()
 
-let codegen (globals : _ ResizeArray, fwd_dcls : _ ResizeArray, types : _ ResizeArray, functions : _ ResizeArray, main_defs : _ ResizeArray) (env : PartEvalResult) =
+let codegen (default_env : Startup.DefaultEnv) (globals : _ ResizeArray, fwd_dcls : _ ResizeArray, types : _ ResizeArray, functions : _ ResizeArray, main_defs : _ ResizeArray) (env : PartEvalResult) =
     let print show r =
         let s_typ_fwd = {text=StringBuilder(); indent=0}
         let s_typ = {text=StringBuilder(); indent=0}
@@ -80,11 +76,27 @@ let codegen (globals : _ ResizeArray, fwd_dcls : _ ResizeArray, types : _ Resize
         f types s_typ
         f functions s_fun
 
+    let layout show =
+        let dict' = Dictionary(HashIdentity.Structural)
+        let dict = Dictionary(HashIdentity.Reference)
+        let f x : LayoutRec = 
+            let x = env.ty_to_data x
+            let a, b =
+                match x with
+                | DRecord a -> let a = Map.map (fun _ -> data_free_vars) a in a |> Map.toArray |> Array.collect snd, a
+                | _ -> data_free_vars x, Map.empty
+            {data=x; free_vars=a; free_vars_by_key=b; tag=dict'.Count}
+        fun x ->
+            let mutable dirty = false
+            let r = Utils.memoize dict (Utils.memoize dict' (fun x -> dirty <- true; f x)) x
+            if dirty then print show r
+            r
+
     let union show =
         let dict = Dictionary(HashIdentity.Reference)
         let f (a : Union) : UnionRec = 
             let free_vars = a.Item.cases |> Map.map (fun _ -> env.ty_to_data >> data_free_vars)
-            {free_vars=free_vars; tag=dict.Count}
+            {free_vars=free_vars; tag=dict.Count; is_heap=a.Item.layout = UHeap}
         fun x ->
             let mutable dirty = false
             let r = Utils.memoize dict (fun x -> dirty <- true; f x) x
@@ -111,7 +123,7 @@ let codegen (globals : _ ResizeArray, fwd_dcls : _ ResizeArray, types : _ Resize
 
     let cfun' show =
         let dict = Dictionary(HashIdentity.Structural)
-        let f (a : Ty, b : Ty) = {tag=dict.Count; domain=a; range=b}
+        let f (a : Ty, b : Ty, t : FunType) = {tag=dict.Count; domain=a; range=b; funtype=t}
         fun x ->
             let mutable dirty = false
             let r = Utils.memoize dict (fun x -> dirty <- true; f x) x
@@ -142,9 +154,9 @@ let codegen (globals : _ ResizeArray, fwd_dcls : _ ResizeArray, types : _ Resize
             let tmp_i = tmp()
             line s $"{tup_ty_tyvs ret} tmp{tmp_i} = {x};"
             Array.mapi (fun i (L(i',_)) -> $"v{i'} = tmp{tmp_i}.v{i};") ret |> line' s
-    and binds (unroll : Stack<int>) (s : CodegenEnv) (ret : BindsReturn) (stmts : TypedBind []) = 
+    and binds (unroll : Stack<int>) (s : CodegenEnv) (ret : BindsReturn) (stmts : TypedBind []) =
         let tup_destruct (a,b) =
-            Array.map2 (fun (L(i,_)) b -> 
+            Array.map2 (fun (L(i,_)) b ->
                 match b with
                 | WLit b -> $"v{i} = {lit b};"
                 | WV (L(i',_)) -> $"v{i} = v{i'};"
@@ -153,7 +165,7 @@ let codegen (globals : _ ResizeArray, fwd_dcls : _ ResizeArray, types : _ Resize
             match x with
             | TyLet(d,trace,a) ->
                 try let d = data_free_vars d
-                    let decl_vars = Array.map (fun (L(i,t)) -> $"{tyv t} v{i};") d
+                    let decl_vars () = Array.map (fun (L(i,t)) -> $"{tyv t} v{i};") d
                     match a with
                     | TyMacro a ->
                         let m = a |> List.map (function CMText x -> x | CMTerm x -> tup_data x | CMType x -> tup_ty x | CMTypeLit x -> type_lit x) |> String.concat ""
@@ -169,7 +181,7 @@ let codegen (globals : _ ResizeArray, fwd_dcls : _ ResizeArray, types : _ Resize
                         else
                             let q = m.Split("\\v")
                             if q.Length = 1 then 
-                                decl_vars |> line' s
+                                decl_vars() |> line' s
                                 return_local s d m 
                                 true
                             else
@@ -192,15 +204,28 @@ let codegen (globals : _ ResizeArray, fwd_dcls : _ ResizeArray, types : _ Resize
                     | TyArrayCreate(a,b) ->  
                         match d with
                         | [|L(i,YArray t)|] -> 
-                            let size =
-                                match b with
-                                | DLit x -> lit x
-                                | _ -> raise_codegen_error "Array sizes need to be statically known in the Cuda C++ backend."
-                            line s $"%s{tup_ty t} v{i}[{size}];"
+                            line s $"{tup_ty t} v{i}[{tup_data b}];"
                             true
                         | _ -> raise_codegen_error "Compiler error: Expected a single variable on the left side of an array create op."
+                    | TyJoinPoint(JPClosure(a,b),b') ->
+                        match d with
+                        | [|L(i,_)|] -> 
+                            let x = closure (a,b)
+                            match x.funtype with
+                            | FT_Pointer ->
+                                let y = cfun (x.domain,x.range,x.funtype)
+                                line s $"Fun{y.tag} v{i} = FunPointerMethod{x.tag};"
+                            | FT_Vanilla ->
+                                let args = args b'
+                                line s $"Closure{x.tag} v{i}{{{args}}};"
+                            | FT_Closure -> 
+                                let y = cfun (x.domain,x.range,x.funtype)
+                                let args = args b'
+                                line s $"Fun{y.tag} v{i}{{new Closure{x.tag}{{{args}}}}};"
+                            true
+                        | _ -> raise_codegen_error "Compiler error: Expected a single variable on the left side of a closure join point."
                     | _ ->
-                        decl_vars |> line' s
+                        decl_vars() |> line' s
                         op unroll s (BindsLocal d) a
                         true
                 with :? CodegenError as e -> raise_codegen_error' trace (e.Data0, e.Data1)
@@ -220,7 +245,7 @@ let codegen (globals : _ ResizeArray, fwd_dcls : _ ResizeArray, types : _ Resize
     and args' b = data_term_vars b |> Array.map show_w |> String.concat ", "
     and tup_term_vars x =
         let args = Array.map show_w x |> String.concat ", "
-        if 1 < x.Length then sprintf "Tuple%i(%s)" (tup (term_vars_to_tys x)).tag args else args
+        if 1 < x.Length then sprintf "Tuple%i{%s}" (tup (term_vars_to_tys x)).tag args else args
     and tup_data x = tup_term_vars (data_term_vars x)
     and tup_ty_tys = function
         | [||] -> "void"
@@ -231,10 +256,10 @@ let codegen (globals : _ ResizeArray, fwd_dcls : _ ResizeArray, types : _ Resize
     and tyv = function
         | YUnion a ->
             match a.Item.layout with
-            | UStack -> sprintf "US%i" (ustack a).tag
-            | UHeap -> sprintf "UH%i *" (uheap a).tag
-        | YLayout(a,Heap) -> raise_codegen_error "Heap layout types aren't supported in the Cuda C++ backend due to them needing to be heap allocated."
-        | YLayout(a,HeapMutable) -> raise_codegen_error "Heap mutable layout types aren't supported in the Cuda C++ backend due to them needing to be heap allocated."
+            | UStack -> sprintf "Union%i" (unions a).tag
+            | UHeap -> sprintf "sptr<Union%i>" (unions a).tag
+        | YLayout(a,Heap) -> sprintf "sptr<Heap%i>" (heap a).tag
+        | YLayout(a,HeapMutable) -> sprintf "sptr<Mut%i>" (mut a).tag
         | YMacro [Text "backend_switch "; Type (YRecord r)] ->
             match r |> Map.tryPick (fun (_, k) v -> if k = backend_name then Some v else None) with
             | Some x -> tup_ty x
@@ -242,17 +267,17 @@ let codegen (globals : _ ResizeArray, fwd_dcls : _ ResizeArray, types : _ Resize
         | YMacro a -> a |> List.map (function Text a -> a | Type a -> tup_ty a | TypeLit a -> type_lit a) |> String.concat ""
         | YPrim a -> prim a
         | YArray a -> sprintf "%s *" (tup_ty a)
-        | YFun(a,b) -> sprintf "Fun%i" (cfun (a,b)).tag
+        | YFun(a,b,t) -> $"Fun%i{(cfun (a,b,t)).tag}"
         | YExists -> raise_codegen_error "Existentials are not supported at runtime. They are a compile time feature only."
         | a -> raise_codegen_error (sprintf "Compiler error: Type not supported in the codegen.\nGot: %A" a)
     and prim = function
         | Int8T -> "char" 
         | Int16T -> "short"
-        | Int32T -> "long"
+        | Int32T -> "int"
         | Int64T -> "long long"
         | UInt8T -> "unsigned char"
         | UInt16T -> "unsigned short"
-        | UInt32T -> "unsigned long"
+        | UInt32T -> "unsigned int"
         | UInt64T -> "unsigned long long"
         | Float32T -> "float"
         | Float64T -> "double"
@@ -304,8 +329,18 @@ let codegen (globals : _ ResizeArray, fwd_dcls : _ ResizeArray, types : _ Resize
             match a with
             | JPMethod(a,b) -> 
                 let x = method (a,b)
-                sprintf "%s%i(%s)" (Option.defaultValue "method_" x.name) x.tag args
-            | JPClosure(a,b) -> sprintf "ClosureMethod%i" (closure (a,b)).tag
+                let method_name = Option.defaultValue "method_" x.name
+                $"{method_name}{x.tag}({args})"
+            | JPClosure(a,b) ->
+                let x = closure (a,b)
+                match x.funtype with
+                | FT_Vanilla -> raise_codegen_error "Compiler error: The vanilla function case should have been blocked elsewhere."
+                | FT_Pointer -> $"FunPointerMethod{x.tag}"
+                | FT_Closure -> $"csptr<ClosureBase{x.tag}>{{new Closure{x.tag}{{{args}}}}}"
+        let layout_index (x'_i : int) (x' : TyV []) =
+            match ret with
+            | BindsLocal x -> Array.map2 (fun (L(i,_)) (L(i',_)) -> $"v{i} = v{x'_i}.base->v{i'};") x x' |> line' s
+            | BindsTailEnd -> raise_codegen_error "Compiler error: Layout index should never come in end position."
         match a with
         | TyMacro _ -> raise_codegen_error "Macros are supposed to be taken care of in the `binds` function."
         | TyIf(cond,tr,fl) ->
@@ -344,12 +379,12 @@ let codegen (globals : _ ResizeArray, fwd_dcls : _ ResizeArray, types : _ Resize
             line s "}"
         | TyUnionUnbox(is,x,on_succs,on_fail) ->
             let case_tags = x.Item.tags
-            let acs = match x.Item.layout with UHeap -> "->" | UStack -> "."
+            let acs = match x.Item.layout with UHeap -> ".base->" | UStack -> "."
             let head = List.head is |> fun (L(i,_)) -> $"v{i}{acs}tag"
             List.pairwise is
             |> List.map (fun (L(i,_), L(i',_)) -> $"v{i}{acs}tag == v{i'}{acs}tag")
             |> String.concat " && "
-            |> function "" -> head | x -> $"{x} ? {head} : -1"
+            |> function "" -> head | x -> $"{x} ? {head} : {max_tag}"
             |> sprintf "switch (%s) {" |> line s
             let _ =
                 let s = indent s
@@ -360,7 +395,7 @@ let codegen (globals : _ ResizeArray, fwd_dcls : _ ResizeArray, types : _ Resize
                         let a, s = data_free_vars a, indent s
                         let qs = ResizeArray(a.Length)
                         Array.iteri (fun field_i (L(v_i,t) as v) -> 
-                            qs.Add $"{tyv t} v{v_i} = v{data_i}{acs}v.case{union_i}.v{field_i};"
+                            qs.Add $"{tyv t} v{v_i} = v{data_i}{acs}case{union_i}.v{field_i};"
                             ) a 
                         line' s qs
                         ) is a
@@ -372,25 +407,31 @@ let codegen (globals : _ ResizeArray, fwd_dcls : _ ResizeArray, types : _ Resize
                 let _ =
                     let s = indent s
                     match on_fail with
-                    | Some b ->
-                        binds s ret b
-                    | None ->
-                        line s "assert(\"Invalid tag.\" && false);"
+                    | Some b -> binds s ret b
+                    | None -> line s "assert(\"Invalid tag.\" && false);"
                 line s "}"
             line s "}"
         | TyUnionBox(a,b,c') ->
             let c = c'.Item
             let i = c.tags.[a]
             let vars = args' b
+            let tag = (unions c').tag
             match c.layout with
-            | UHeap -> sprintf "UH%i_%i(%s)" (uheap c').tag i vars
-            | UStack -> sprintf "US%i_%i(%s)" (ustack c').tag i vars
+            | UHeap -> $"sptr<Union{tag}>{{new Union{tag}{{Union{tag}_{i}{{{vars}}}}}}}"
+            | UStack -> $"Union{tag}{{Union{tag}_{i}{{{vars}}}}}"
             |> return'
-        | TyLayoutToHeap(a,b) -> raise_codegen_error "Cannot create a heap layout type in the Cuda C++ backend due to them needing to be heap allocated."
-        | TyLayoutToHeapMutable(a,b) -> raise_codegen_error "Cannot create a heap mutable layout type in the Cuda C++ backend due to them needing to be heap allocated."
-        | TyLayoutIndexAll _ 
-        | TyLayoutIndexByKey _ -> raise_codegen_error "Cannot index into a layout type in the Cuda C++ backend due to them needing to be heap allocated."
-        | TyLayoutHeapMutableSet(L(i,t),b,c) -> raise_codegen_error "Cannot set a value into a layout type in the Cuda C++ backend due to them needing to be heap allocated."
+        | TyLayoutToHeap(a,b) -> 
+            let tag = (heap b).tag
+            $"sptr<Heap{tag}>{{new Heap{tag}{{{args' a}}}}}" |> return'
+        | TyLayoutToHeapMutable(a,b) -> 
+            let tag = (mut b).tag
+            $"sptr<Mut{tag}>{{new Mut{tag}{{{args' a}}}}}" |> return'
+        | TyLayoutIndexAll(x) -> match x with L(i,YLayout(a,lay)) -> (match lay with Heap -> heap a | HeapMutable -> mut a).free_vars |> layout_index i | _ -> failwith "Compiler error: Expected the TyV in layout index to be a layout type."
+        | TyLayoutIndexByKey(x,key) -> match x with L(i,YLayout(a,lay)) -> (match lay with Heap -> heap a | HeapMutable -> mut a).free_vars_by_key.[key] |> layout_index i | _ -> failwith "Compiler error: Expected the TyV in layout index by key to be a layout type."
+        | TyLayoutHeapMutableSet(L(i,t),b,c) ->
+            let a = List.fold (fun s k -> match s with DRecord l -> l.[k] | _ -> raise_codegen_error "Compiler error: Expected a record.") (mut t).data b
+            Array.map2 (fun (L(i',_)) b -> $"v{i}.base->v{i'} = {show_w b};") (data_free_vars a) (data_term_vars c)
+            |> String.concat " " |> line s
         | TyArrayLiteral(a,b') -> raise_codegen_error "Compiler error: TyArrayLiteral should have been taken care of in TyLet."
         | TyArrayCreate(a,b) ->  raise_codegen_error "Compiler error: TyArrayCreate should have been taken care of in TyLet."
         | TyFailwith(a,b) ->
@@ -403,7 +444,7 @@ let codegen (globals : _ ResizeArray, fwd_dcls : _ ResizeArray, types : _ Resize
             let rec loop = function
                 | DPair(a,b) -> tup_data a :: loop b
                 | a -> [tup_data a]
-            let args = loop b |> String.concat ", "
+            let args = loop b |> List.filter ((<>) "") |> String.concat ", "
             $"v{i}({args})" |> return'
         | TyArrayLength(_,b) -> raise_codegen_error "Array length is not supported in the Cuda C++ backend as they are bare pointers."
         | TyStringLength(_,b) -> raise_codegen_error "String length is not supported in the Cuda C++ backend."
@@ -460,7 +501,7 @@ let codegen (globals : _ ResizeArray, fwd_dcls : _ ResizeArray, types : _ Resize
             | NanIs, [x] -> sprintf "isnan(%s)" (tup_data x)
             | UnionTag, [DV(L(i,YUnion l)) as x] -> 
                 match l.Item.layout with
-                | UHeap -> "->tag"
+                | UHeap -> ".base->tag"
                 | UStack -> ".tag"
                 |> sprintf "v%i%s" i
             | _ -> raise_codegen_error <| sprintf "Compiler error: %A with %i args not supported" op l.Length
@@ -483,32 +524,36 @@ let codegen (globals : _ ResizeArray, fwd_dcls : _ ResizeArray, types : _ Resize
             )
     and method : _ -> MethodRec = method_template false
     and method_while : _ -> MethodRec = method_template true
-    and closure_args domain =
+    and closure_args domain count_start =
         let rec loop = function
             | YPair(a,b) -> a :: loop b
             | a -> [a]
-        let mutable count = 0
-        let assert_not_void = function [||] -> raise_codegen_error "Void arguments in closures are not allowed." | x -> x
+        let mutable count = count_start
         let rename x = Array.map (fun (L(i,t)) -> let x = L(count,t) in count <- count+1; x) x
-        loop domain |> List.mapi (fun i x -> let n = env.ty_to_data x |> data_free_vars in i, tup_ty_tyvs n, n |> rename |> assert_not_void)
+        let mutable i = 0
+        loop domain |> List.choose (fun x -> 
+            let n = env.ty_to_data x |> data_free_vars 
+            let x = if n.Length <> 0 then Some(i, tup_ty_tyvs n, n |> rename) else None
+            i <- i+1
+            x
+            )
     and closure : _ -> ClosureRec =
         jp (fun ((jp_body,key & (C(args,_,fun_ty))),i) ->
             match fun_ty with
-            | YFun(domain,range) ->
+            | YFun(domain,range,t) ->
                 match (fst env.join_point_closure.[jp_body]).[key] with
-                | Some(domain_args, body) -> 
-                    if Array.isEmpty (rdata_free_vars args) = false then raise_codegen_error "The Cuda C++ backend doesn't support closures due to them needing to be heap allocated, only function pointers. For them to be converted to pointers, the closures must not have any free variables in them."
-                    {tag=i; domain=domain; range=range; body=body}
+                | Some(domain_args, body) -> {tag=i; domain=domain; range=range; body=body; free_vars=rdata_free_vars args; funtype=t}
                 | _ -> raise_codegen_error "Compiler error: The method dictionary is malformed"
-            | YFunPtr _ -> raise_codegen_error "Function pointers are not supported in the Cuda backend."
             | _ -> raise_codegen_error "Compiler error: Unexpected type in the closure join point."
             ) (fun _ s_typ s_fun x ->
             let i, range = x.tag, tup_ty x.range
-            let closure_args = closure_args x.domain
+            let closure_args = closure_args x.domain x.free_vars.Length
             let args = closure_args |> List.map (fun (i,ty,_) -> $"{ty} tup{i}") |> String.concat ", "
-            $"__device__ {range} ClosureMethod{i}({args}){{" |> line s_fun
-            let _ =
+            let print_body s_fun =
                 let s_fun = indent s_fun
+                x.free_vars |> Array.map (fun (L(i,t)) ->
+                    $"{tyv t} & v{i} = this->v{i};"
+                    ) |> String.concat " " |> line s_fun
                 closure_args |> List.map (fun (i'',_,vars) ->
                     Array.mapi (fun i' (L(i,t)) -> 
                         if vars.Length <> 1 then $"{tyv t} v{i} = tup{i''}.v{i'};"
@@ -517,13 +562,60 @@ let codegen (globals : _ ResizeArray, fwd_dcls : _ ResizeArray, types : _ Resize
                     |> String.concat " "
                     ) |> String.concat " " |> line s_fun
                 binds_start s_fun x.body
-            line s_fun "}"
+            match x.funtype with
+            | FT_Pointer ->
+                $"__device__ {range} FunPointerMethod{i}({args}){{" |> line s_fun
+                print_body s_fun
+                line s_fun "}"
+            | FT_Vanilla | FT_Closure ->
+                match x.funtype with
+                | FT_Pointer -> raise_codegen_error "Compiler error: The pointer case have been taken care of (1)."
+                | FT_Closure ->
+                    let i' = (cfun (x.domain,x.range,x.funtype)).tag
+                    line s_typ $"struct Closure{i} : public ClosureBase{i'} {{"
+                | FT_Vanilla ->
+                    line s_typ $"struct Closure{i} {{"
+                let () =
+                    let s_typ = indent s_typ
+                    let () = // free vars in the environment
+                        print_ordered_args s_typ x.free_vars
+                    let () = // operator()
+                        match x.funtype with
+                        | FT_Pointer -> raise_codegen_error "Compiler error: The pointer case have been taken care of (2)."
+                        | FT_Vanilla -> line s_typ $"__device__ {range} operator()({args}){{"
+                        | FT_Closure -> line s_typ $"__device__ {range} operator()({args}) override {{"
+                        print_body s_typ
+                        line s_typ "}"
+                    let () = // constructor
+                        match x.free_vars with
+                        | [||] -> ()
+                        | _ ->
+                            let constructor_args = 
+                                x.free_vars 
+                                |> Array.map (fun (L(i,t)) -> $"{tyv t} _v{i}")
+                                |> String.concat ", "
+                            let initializer_args = 
+                                x.free_vars 
+                                |> Array.map (fun (L(i,t)) -> $"v{i}(_v{i})")
+                                |> String.concat ", "
+                            line s_typ $"Closure{i}({constructor_args}) : {initializer_args} {{ }}"
+                    let () = // destructor
+                        match x.funtype with
+                        | FT_Pointer | FT_Vanilla -> ()
+                        | FT_Closure -> line s_typ $"~Closure{i}() override = default;"
+                    ()
+                line s_typ "};"
             )
     and cfun : _ -> CFunRec =
         cfun' (fun s_fwd s_typ s_fun x ->
             let i, range = x.tag, tup_ty x.range
-            let domain_args_ty = closure_args x.domain |> List.map (fun (_,ty,_) -> ty) |> String.concat ", "
-            line s_fwd $"typedef %s{range} (* Fun%i{i})(%s{domain_args_ty});"
+            let domain_args_ty = closure_args x.domain 0 |> List.map (fun (_,ty,_) -> ty) |> String.concat ", "
+            match x.funtype with
+            | FT_Vanilla -> raise_codegen_error "Regular functions do not have a composable type in the Cuda backend. Consider explicitly converting them to either closures or pointers using `to_closure` or `to_fptr` if you want to pass them through boundaries."
+            | FT_Pointer -> line s_fwd $"typedef {range} (* Fun{i})({domain_args_ty});"
+            | FT_Closure ->
+                line s_fwd $"struct ClosureBase{i} {{ int refc{{0}}; __device__ virtual {range} operator()({domain_args_ty}) = 0; __device__ virtual ~ClosureBase{i}() = default; }};"
+                line s_fwd $"typedef csptr<ClosureBase{i}> Fun{i};"
             )
     and tup : _ -> TupleRec = 
         tuple (fun s_fwd s_typ s_fun x ->
@@ -531,59 +623,150 @@ let codegen (globals : _ ResizeArray, fwd_dcls : _ ResizeArray, types : _ Resize
             line s_fwd $"struct {name};"
             line s_typ $"struct {name} {{"
             x.tys |> Array.mapi (fun i x -> L(i,x)) |> print_ordered_args (indent s_typ)
-
             let concat x = String.concat ", " x
             let args = x.tys |> Array.mapi (fun i x -> $"{tyv x} t{i}")
             let con_init = x.tys |> Array.mapi (fun i x -> $"v{i}(t{i})")
-            line (indent s_typ) $"__device__ {name}({concat args}) : {concat con_init} {{}}" 
-            line (indent s_typ) $"__device__ {name}() = default;" 
-
+            if args.Length <> 0 then
+                line (indent s_typ) $"__device__ {name}() = default;"
+                line (indent s_typ) $"__device__ {name}({concat args}) : {concat con_init} {{}}"
             line s_typ "};"
-
             )
-    and ustack : _ -> UnionRec =
+    and unions : _ -> UnionRec = 
         let inline map_iteri f x = Map.fold (fun i k v -> f i k v; i+1) 0 x |> ignore
         union (fun s_fwd s_typ s_fun x ->
             let i = x.tag
-            line s_fwd $"struct US{i};"
-            line s_typ $"struct US{i} {{"
-            let _ =
+            line s_fwd $"struct Union{i};" // Forward declaration for the union.
+            map_iteri (fun tag k v -> // The individual union cases.
+                line s_typ $"struct Union{i}_{tag} {{ // {k}"
+                // The free vars in the env.
+                print_ordered_args (indent s_typ) v
+                let () = // constructors
+                    let s_typ = indent s_typ
+                    let concat x = String.concat ", " x
+                    let args = v |> Array.map (fun (L(i,x)) -> $"{tyv x} t{i}")
+                    let con_init = v |> Array.map (fun (L(i,x)) -> $"v{i}(t{i})")
+                    if v.Length <> 0 then 
+                        line s_typ $"__device__ Union{i}_{tag}({concat args}) : {concat con_init} {{}}" 
+                        line s_typ $"__device__ Union{i}_{tag}() = delete;" 
+                line s_typ "};"
+                ) x.free_vars
+                
+            line s_typ $"struct Union{i} {{" // The union definition.
+            let _ = // Union cases inside the union.
                 let s_typ = indent s_typ
-                line s_typ "union {"
+                line s_typ $"union {{"
                 let _ =
                     let s_typ = indent s_typ
-                    map_iteri (fun tag (_, k) v -> 
-                        if Array.isEmpty v = false then
-                            line s_typ "struct {"
-                            print_ordered_args (indent s_typ) v
-                            line s_typ (sprintf "} case%i; // %s" tag k)
-                        ) x.free_vars
-                line s_typ "} v;"
+                    map_iteri (fun tag (_,k) v -> line s_typ $"Union{i}_{tag} case{tag}; // {k}") x.free_vars
+                line s_typ "};"
 
-                // Tag
-                //let num_bits = num_bits_needed_to_represent x.free_vars.Count
-                //if num_bits > 32 then raise_codegen_error "Too many union cases! Cannot have a union case type with more than 2^32 - 1 possible tags."
-                if x.free_vars.Count >= 255 then raise_codegen_error "Too many union cases. They should not be more than 255."
-                line s_typ $"unsigned char tag;"
+                if x.is_heap then line s_typ "int refc{0};"
+                if x.free_vars.Count > int max_tag then raise_codegen_error $"Too many union cases. They should not be more than {max_tag}."
+                line s_typ $"unsigned char tag{{{max_tag}}};"
+                line s_typ $"__device__ Union{i}() {{}}" // default constructor, the refc and tag have def value so we don't have to do anything here.
+                
+                map_iteri (fun tag k v -> // The constructors for all the union cases.
+                    line s_typ $"__device__ Union{i}(Union{i}_{tag} t) : tag({tag}), case{tag}(t) {{}} // {k}"
+                    ) x.free_vars
+                
+                line s_typ $"__device__ Union{i}(Union{i} & x) : tag(x.tag) {{" // copy constructor
+                let () =
+                    let s_typ = indent s_typ
+                    line s_typ "switch(x.tag){"
+                    let () = // copy constructor cases
+                        let s_typ = indent s_typ
+                        map_iteri (fun tag k v -> 
+                            line s_typ $"case {tag}: new (&this->case{tag}) Union{i}_{tag}(x.case{tag}); break; // {k}"
+                            ) x.free_vars
+                    line s_typ "}"
+                line s_typ "}"
+                line s_typ $"__device__ Union{i}(Union{i} && x) : tag(x.tag) {{" // move constructor
+                let () =
+                    let s_typ = indent s_typ
+                    line s_typ "switch(x.tag){"
+                    let () = // move constructor cases
+                        let s_typ = indent s_typ
+                        map_iteri (fun tag k v -> 
+                            line s_typ $"case {tag}: new (&this->case{tag}) Union{i}_{tag}(std::move(x.case{tag})); break; // {k}"
+                            ) x.free_vars
+                    line s_typ "}"
+                line s_typ "}"
+                line s_typ $"__device__ Union{i} & operator=(Union{i} & x) {{" // copy assignment operator
+                let () =
+                    let s_typ = indent s_typ
+                    line s_typ "if (this->tag == x.tag) {" 
+                    let () =
+                        let s_typ = indent s_typ
+                        line s_typ "switch(x.tag){"
+                        let () = // copy assignment cases
+                            let s_typ = indent s_typ
+                            map_iteri (fun tag k v -> 
+                                line s_typ $"case {tag}: this->case{tag} = x.case{tag}; break; // {k}"
+                                ) x.free_vars
+                        line s_typ "}"
+                    line s_typ "} else {"
+                    let () =
+                        let s_typ = indent s_typ
+                        line s_typ $"this->~Union{i}();"
+                        line s_typ $"new (this) Union{i}{{x}};"
+                    line s_typ "}"
+                    line s_typ "return *this;"
+                line s_typ "}"
+                line s_typ $"__device__ Union{i} & operator=(Union{i} && x) {{" // move assignment operator
+                let () =
+                    let s_typ = indent s_typ
+                    line s_typ "if (this->tag == x.tag) {" 
+                    let () =
+                        let s_typ = indent s_typ
+                        line s_typ "switch(x.tag){"
+                        let () = // move assignment cases
+                            let s_typ = indent s_typ
+                            map_iteri (fun tag k v -> 
+                                line s_typ $"case {tag}: this->case{tag} = std::move(x.case{tag}); break; // {k}"
+                                ) x.free_vars
+                        line s_typ "}"
+                    line s_typ "} else {"
+                    let () =
+                        let s_typ = indent s_typ
+                        line s_typ $"this->~Union{i}();"
+                        line s_typ $"new (this) Union{i}{{std::move(x)}};"
+                    line s_typ "}"
+                    line s_typ "return *this;"
+                line s_typ "}"
+                line s_typ $"__device__ ~Union{i}() {{"
+                let () = // destructor
+                    let s_typ = indent s_typ
+                    line s_typ "switch(this->tag){"
+                    let () = // destructor cases
+                        let s_typ = indent s_typ
+                        map_iteri (fun tag k v -> 
+                            line s_typ $"case {tag}: this->case{tag}.~Union{i}_{tag}(); break; // {k}"
+                            ) x.free_vars
+                    line s_typ "}"
+                    line s_typ $"this->tag = {max_tag};"
+                line s_typ "}"
             line s_typ "};"
-
             map_iteri (fun tag (_, k) v -> 
-                let args = v |> Array.map (fun (L(i,t)) -> $"{tyv t} v{i}") |> String.concat ", "
-                line s_fun (sprintf "__device__ US%i US%i_%i(%s) { // %s" i i tag args k)
-                let _ =
-                    let s_fun = indent s_fun
-                    line s_fun $"US{i} x;"
-                    line s_fun $"x.tag = {tag};"
-                    if v.Length <> 0 then
-                        v |> Array.map (fun (L(i,t)) -> $"x.v.case{tag}.v{i} = v{i};") |> line' s_fun
-                    line s_fun "return x;"
-                line s_fun "}"
-                ) x.free_vars
             )
-    and uheap _ : UnionRec = raise_codegen_error "Recursive unions aren't allowed in the Cuda C++ backend due to them needing to be heap allocated."
-
-    global' "template <typename el, int dim> struct static_array { el v[dim]; };"
-    global' "template <typename el, int dim, typename default_int> struct static_array_list { el v[dim]; default_int length; };"
+    and layout_tmpl name : _ -> LayoutRec =
+        layout (fun s_fwd s_typ s_fun (x : LayoutRec) ->
+            let name = sprintf "%s%i" name x.tag
+            line s_fwd $"struct {name};"
+            line s_typ $"struct {name} {{"
+            let () =
+                let s_typ = indent s_typ
+                line s_typ "int refc{0};"
+                x.free_vars |> print_ordered_args s_typ
+                let concat x = String.concat ", " x
+                let args = x.free_vars |> Array.map (fun (L(i,x)) -> $"{tyv x} t{i}")
+                let con_init = x.free_vars |> Array.map (fun (L(i,x)) -> $"v{i}(t{i})")
+                if args.Length <> 0 then
+                    line s_typ $"__device__ {name}() = default;"
+                    line s_typ $"__device__ {name}({concat args}) : {concat con_init} {{}}" 
+            line s_typ "};"
+            )
+    and heap : _ -> LayoutRec = layout_tmpl "Heap"
+    and mut : _ -> LayoutRec = layout_tmpl "Mut"
 
     fun vs (x : TypedBind []) ->
         match binds_last_data x |> data_term_vars |> term_vars_to_tys with
@@ -594,5 +777,10 @@ let codegen (globals : _ ResizeArray, fwd_dcls : _ ResizeArray, types : _ Resize
             binds_start (indent main_defs') x
             line main_defs' "}"
             main_defs.Add(main_defs'.text.ToString())
+
+            global' $"using default_int = {prim default_env.default_int};"
+            global' $"using default_uint = {prim default_env.default_uint};"
+            global' (IO.File.ReadAllText(IO.Path.Join(AppDomain.CurrentDomain.BaseDirectory, "reference_counting.cuh")))
+            
         | _ ->
             raise_codegen_error $"The return type of the __global__ kernel in the Cuda backend should be a void type."
