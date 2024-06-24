@@ -1524,9 +1524,6 @@ let infer package_id module_id (top_env' : TopEnv) expr =
                 | s ->
                     let l, (env, _i) =
                         List.mapFold (fun (env, i) (a,b) ->
-                            trace Debug
-                                (fun () -> $"Infer.infer / s / List.mapFold")
-                                (fun () -> $"a: %A{a} / b: {b} / i: {i}")
                             let v = fresh_var scope
                             (((i, a), v), (loop env v b, i + 1))
                             ) ((scope, env), 0) l

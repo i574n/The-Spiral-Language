@@ -573,7 +573,7 @@ let peval (env : TopEnv) (x : E) =
                 let domain_data = ty_to_data s domain
                 s.env_stack_term.[0] <- domain_data
                 dict.[join_point_key] <- None
-                let seq,ty = term_scope'' s body
+                let seq,ty = term_scope'' s body (Some fun_ty)
                 dict.[join_point_key] <- Some(domain_data, seq)
                 let ty =
                     match ty with
@@ -636,11 +636,27 @@ let peval (env : TopEnv) (x : E) =
                 ) x
         let v = f x
         if dirty then v else x
-    and term_scope'' s x =
+    and term_scope'' s x fun_ty =
         let x = term s x |> dyn false s
+        let x =
+            match x with
+            | DRecord c ->
+                c
+                |> Seq.map (fun (KeyValue ((i, k), v)) ->
+                    let i =
+                        match fun_ty with
+                        | Some (YFun (YNominal _, YRecord a)) ->
+                            a |> Map.tryPick (fun (i', k') _ -> if k = k' then Some i' else None)
+                        | _ -> None
+                        |> Option.defaultValue i
+                    (i, k), v
+                )
+                |> Map.ofSeq
+                |> DRecord
+            | _ -> x
         let x_ty = data_to_ty s x
         seq_apply s x, x_ty
-    and term_scope' s cse x = term_scope'' {s with seq=ResizeArray(); cse=cse :: s.cse} x
+    and term_scope' s cse x = term_scope'' {s with seq=ResizeArray(); cse=cse :: s.cse} x None
     and term_scope s x = term_scope' s (Dictionary(HashIdentity.Structural)) x
     and nominal_type_apply s x =
         match x with
@@ -974,10 +990,9 @@ let peval (env : TopEnv) (x : E) =
                     | None -> raise_type_error s <| sprintf "The union does not have key %s.\nGot: %s" k (show_ty b)
                 | _ -> raise_type_error s <| sprintf "Expected key/value pair.\nGot: %s" (show_data a)
             | b' ->
-                let a_ty = data_to_ty s a
-                let a_ty =
-                    match a_ty with
-                    | YRecord a ->
+                let a =
+                    match a with
+                    | DRecord a ->
                         a
                         |> Seq.map (fun (KeyValue ((i, k), v)) ->
                             k, ((i, k), v)
@@ -985,8 +1000,10 @@ let peval (env : TopEnv) (x : E) =
                         |> Seq.distinctBy fst
                         |> Seq.map snd
                         |> Map.ofSeq
-                        |> YRecord
-                    | _ -> a_ty
+                        |> DRecord
+                    | _ -> a
+
+                let a_ty = data_to_ty s a
 
                 if a_ty = b' then DNominal(a,b)
                 else raise_type_error s <| sprintf "Type error in nominal constructor.\nGot: %s\nExpected: %s" (show_ty a_ty) (show_ty b')
@@ -1063,7 +1080,7 @@ let peval (env : TopEnv) (x : E) =
                     let s = rename_global_term s
                     let annot = Option.map (ty s) annot
                     dict.[join_point_key] <- (None, annot, jp_name)
-                    let seq,ty = term_scope'' s body
+                    let seq,ty = term_scope'' s body None
                     dict.[join_point_key] <- (Some seq, Some ty, jp_name)
                     annot |> Option.iter (fun annot -> if annot <> ty then raise_type_error s <| sprintf "The annotation of the join point does not match its body's type.Got: %s\nExpected: %s" (show_ty ty) (show_ty annot))
                     ty
