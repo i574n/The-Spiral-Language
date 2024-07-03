@@ -14,7 +14,19 @@
 	"module": "true",
 	"main": "out/index.js",
 	"activationEvents": [
-		"onLanguage:spiral"
+    "onLanguage:spiral",
+    "onNotebook:dotnet-interactive",
+    "onNotebook:dotnet-interactive-window",
+    "onNotebook:jupyter-notebook",
+    "onNotebook:polyglot-notebook",
+    "onNotebook:polyglot-notebook-window",
+    "onNotebook:jupyter-notebook",
+    "onCommand:dotnet-interactive-i574n.acquire",
+    "onCommand:polyglot-notebook.fileNew",
+    "onCommand:polyglot-notebook.newNotebook",
+    "onCommand:polyglot-notebook.openNotebook",
+    "onCommand:polyglot-notebook.saveAsNotebook",
+    "onView:polyglot-notebook-panel-values"
 	],
 	"contributes": {
 		"configuration": {
