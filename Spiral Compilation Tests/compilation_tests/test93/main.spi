@@ -1,0 +1,32 @@
+// Do the GADTs work?
+
+union t y =
+    | A :: int -> t int
+    | B :: t float
+    | C :: forall x. bool * x -> t x
+    | D :: forall x y. y * x -> t (x * y)
+
+let f forall y. (x : t y) =
+    match x with
+    | A =>
+        inl x = x
+        ()
+    | B =>
+        inl x = x
+        inl y = x
+        inl q = y
+        ()
+    | C sd => 
+        inl x = x
+        ()
+    | D sd => 
+        inl x = x
+        ()
+
+inl main() : () = 
+    inl x = f (A 2)
+    inl x = f B
+    inl x = f (C (false, "qwe"))
+    inl x = f (C (false, 234u8))
+    inl x = f (D (false, 234u8))
+    ()

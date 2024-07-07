@@ -42,6 +42,7 @@ type StackSize = int
 type Nominal = {|body : T; id : GlobalId; name : string|} ConsedNode // TODO: When the time comes to implement incremental compilation, make the `body` field a weak reference.
 type Macro = Text of string | Type of Ty | TypeLit of Ty
 and Ty =
+    | YVoid
     | YB
     | YLit of Literal
     | YSymbol of string
@@ -335,6 +336,7 @@ let show_ty x =
     let rec f prec x =
         let p = p prec
         match x with
+        | YVoid -> "void"
         | YB -> "()"
         | YLit x -> show_lit x
         | YPair(a,b) -> p 25 (sprintf "%s * %s" (f 25 a) (f 24 b))
@@ -487,6 +489,32 @@ let add_trace (s : LangEnv) r = {s with trace = r :: s.trace}
 let store_term (s : LangEnv) i v = s.env_stack_term.[i-s.env_global_term.Length] <- v
 let store_ty (s : LangEnv) i v = s.env_stack_type.[i-s.env_global_type.Length] <- v
 
+let is_unify s x =
+    let is_metavar = HashSet()
+    let rec f = function
+        | YB, YB -> true
+        | YFun(a,b,t), YFun(a',b',t') -> t = t' && f (a,a') && f (b,b')
+        | YApply(a,b), YApply(a',b')
+        | YPair(a,b), YPair(a',b') -> f (a,a') && f (b,b')
+        | YSymbol a, YSymbol b -> a = b
+        | YTypeFunction(a,b,c,d), YTypeFunction(a',b',c',d') -> a = a' && Array.forall2 (fun b b' -> f (b,b')) b b' && c = c' && d = d'
+        | YRecord a, YRecord a' -> Map.forall (fun k v' -> match Map.tryFind k a with Some v -> f (v, v') | None -> false) a'
+        | YPrim a, YPrim a' -> a = a'
+        | YArray a, YArray a' -> f (a, a')
+        | YMacro a, YMacro a' ->
+            List.forall2 (fun a a' ->
+                match a, a' with
+                | Text a, Text a' -> a = a'
+                | Type a, Type a' -> f (a,a')
+                | _ -> false
+                ) a a'
+        | YNominal a, YNominal a' -> a = a'
+        | YLayout(a,b), YLayout(a',b') -> f (a,a') && b = b'
+        | YUnion a, YUnion a' -> a = a'
+        | a, YMetavar i -> (is_metavar.Add i && (store_ty s i a; true)) || a = vt s i
+        | _ -> false
+    f x
+
 type PartEvalResult = {
     join_point_method : Dictionary<string ConsedNode * E,Dictionary<ConsedNode<RData [] * Ty []>,TypedBind [] option * Ty option * string option> * HashConsTable>
     join_point_closure : Dictionary<string ConsedNode * E,Dictionary<ConsedNode<RData [] * Ty [] * Ty>,(Data * TypedBind []) option> * HashConsTable>
@@ -505,6 +533,7 @@ let peval (env : TopEnv) (x : E) =
     let rec ty_to_data s x =
         let f = ty_to_data s
         match x with
+        | YVoid -> raise_type_error s "Compiler error: Cannot construct an instance of a void type."
         | YB -> DB
         | YPair(a,b) -> DPair(f a, f b)
         | YSymbol a -> DSymbol a
@@ -678,7 +707,8 @@ let peval (env : TopEnv) (x : E) =
     and ty s x =
         match x with
         | TPatternRef _ -> failwith "Compiler error: TPatternRef should have been eliminated during the prepass."
-        | TArrow _ | TJoinPoint _ -> failwith "Compiler error: Should have been transformed during the prepass."
+        | TForall _ | TArrow _ | TJoinPoint _ -> failwith "Compiler error: Should have been transformed during the prepass."
+        | TForall'(_,_,_,x) -> raise_type_error s "Type level foralls are not allowed in the partial evaluation pass."
         | TMetaV i -> YMetavar i
         | TArrow'(scope,i,body) ->
             assert (i = scope.ty.free_vars.Length)
@@ -717,18 +747,10 @@ let peval (env : TopEnv) (x : E) =
         | TV i -> vt s i
         | TPair(_,a,b) -> YPair(ty s a, ty s b)
         | TFun(a,b,t) -> YFun(ty s a, ty s b,t)
-        // | TModule a -> YRecord(Map.map (fun _ -> ty s) a)
-        // | TRecord(_,a) -> YRecord(Map.map (fun _ -> ty s) a)
         | TModule a ->
             YRecord(
                 a
-                |> Seq.mapi (fun i (KeyValue (k, v)) ->
-                    trace Verbose
-                        (fun () -> $"PartEval.peval / ty / TModule")
-                        (fun () -> $"k: %A{k} / v: %A{v} / a.Count: {a.Count}")
-
-                    (i, k), (v |> ty s)
-                )
+                |> Seq.mapi (fun i (KeyValue (k, v)) -> (i, k), (v |> ty s))
                 |> Map.ofSeq
             )
         | TRecord(_,a) -> YRecord(Map.map (fun _ -> ty s) a)
@@ -737,14 +759,26 @@ let peval (env : TopEnv) (x : E) =
             let tag_cases = Array.zeroCreate (Map.count a)
             let mutable is_degenerate = true
             let cases =
-                Map.map (fun (i, k) v ->
-                    let v = ty s v
-                    is_degenerate <- is_degenerate && match v with YB -> true | _ -> false
-                    tags.[k] <- i
-                    tag_cases.[i] <- (k,v)
-                    v
-                    ) a
+                Map.fold (fun cases (i,k) v ->
+                    let v = Option.defaultValue (fst v) (snd v) // If the union case is generalized, use the specialized destructor instead of the constructor to evaluate the type.
+                    match ty s v with
+                    | YVoid -> cases
+                    | v ->
+                        is_degenerate <- is_degenerate && match v with YB -> true | _ -> false
+                        tags.[k] <- i
+                        tag_cases.[i] <- (k,v)
+                        Map.add (i,k) v cases
+                    ) Map.empty a
             YUnion(H {|cases=cases; layout=b; tags=tags; tag_cases=tag_cases; is_degenerate=is_degenerate|})
+        | TTypecase(r,a,b) ->
+            let s = add_trace s r
+            let a = ty s a
+            let rec loop = function
+                | (a',b) :: rest -> if is_unify s (a,ty s a') then Some(ty s b) else loop rest
+                | [] -> None
+            match loop b with
+            | Some r -> r
+            | None -> YVoid
         | TSymbol(_,a) -> YSymbol a
         | TApply(r,a,b) ->
             let s = add_trace s r
@@ -1454,40 +1488,13 @@ let peval (env : TopEnv) (x : E) =
         | EDefaultLitTest(r,a,b,bind,on_succ,on_fail) -> let s = add_trace s r in lit_test s (default_lit s a (ty s b)) bind on_succ on_fail
         | ETypecase(r,a,b) ->
             let s = add_trace s r
-            let is_unify x =
-                let is_metavar = HashSet()
-                let rec f = function
-                    | YB, YB -> true
-                    | YFun(a,b,t), YFun(a',b',t') -> t = t' && f (a,a') && f (b,b')
-                    | YApply(a,b), YApply(a',b')
-                    | YPair(a,b), YPair(a',b') -> f (a,a') && f (b,b')
-                    | YSymbol a, YSymbol b -> a = b
-                    | YTypeFunction(a,b,c,d), YTypeFunction(a',b',c',d') -> a = a' && Array.forall2 (fun b b' -> f (b,b')) b b' && c = c' && d = d'
-                    | YRecord a, YRecord a' ->
-                        Map.forall (fun (_i, k) v' ->
-                            match a |> Map.tryPick (fun (_i', k') v -> if k' = k then Some v else None) with
-                            | Some v -> f (v,v')
-                            | None -> false
-                        ) a'
-                    | YPrim a, YPrim a' -> a = a'
-                    | YArray a, YArray a' -> f (a, a')
-                    | YMacro a, YMacro a' ->
-                        List.forall2 (fun a a' ->
-                            match a, a' with
-                            | Text a, Text a' -> a = a'
-                            | Type a, Type a' -> f (a,a')
-                            | _ -> false
-                            ) a a'
-                    | YNominal a, YNominal a' -> a = a'
-                    | YLayout(a,b), YLayout(a',b') -> f (a,a') && b = b'
-                    | YUnion a, YUnion a' -> a = a'
-                    | a, YMetavar i -> (is_metavar.Add i && (store_ty s i a; true)) || a = vt s i
-                    | _ -> false
-                f x
             let a = ty s a
-            let mutable r = Unchecked.defaultof<_>
-            if List.exists (fun (a',b) -> is_unify (a,ty s a') && (r <- term s b; true)) b
-            then r else raise_type_error s <| sprintf "Typecase miss.\nGot: %s" (show_ty a)
+            let rec loop = function
+                | (a',b) :: rest -> if is_unify s (a,ty s a') then Some(term s b) else loop rest
+                | [] -> None
+            match loop b with
+            | Some r -> r
+            | None -> raise_type_error s <| sprintf "Typecase miss.\nGot: %s" (show_ty a)
         | EOp(_,ToFunPtr,[a]) ->
             match term s a with
             | DFunction(body,Some(TFun(domain,range,_)),a,b,c,d) -> DFunction(body,Some(TFun(domain,range,FT_Pointer)),a,b,c,d)
@@ -1505,11 +1512,26 @@ let peval (env : TopEnv) (x : E) =
         | EOp(_,PragmaUnrollPop,[]) ->
             push_op_no_rewrite' s PragmaUnrollPop [] YB
         | EOp(_,BackendSwitch,l) ->
-            let rec loop = function
-                | EPair(r,ELit(_,LitString backend),b) :: xs -> if backend = s.backend.node then term s b else loop xs
-                | _ :: xs -> raise_type_error s "BackendSwitch should be a list of (string literal,body) pairs."
-                | [] -> raise_type_error s $"Cannot find the backend {s.backend.node} in the backend switch op."
-            loop l |> dyn true s
+            let mutable t = None
+            let mutable d = None
+            let validate_type t' =
+                match t with
+                | Some t -> if t <> t' then raise_type_error s $"The backend switch needs to have the same type for all of its branches.\nGot: {show_ty t'}\nExpected: {show_ty t}"
+                | None -> t <- Some t'
+            l |> List.iter (function
+                | EPair(_,ELit(_,LitString backend),b) -> 
+                    if backend = s.backend.node then 
+                        let d' = term s b
+                        validate_type (data_to_ty s d')
+                        d <- Some d'
+                    else
+                        let _,t' = term_scope s b
+                        validate_type t'
+                | _ -> raise_type_error s "BackendSwitch should be a list of (string literal,body) pairs."
+                )
+            match d with
+            | Some cur -> cur |> dyn true s
+            | None -> raise_type_error s $"Cannot find the backend {s.backend.node} in the backend switch op."
         | EOp(_,UsesOriginalTermVars,[a;b]) ->
             let a = term s a |> data_term_vars'
             let b = term s b |> data_term_vars'

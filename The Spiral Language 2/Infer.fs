@@ -41,7 +41,6 @@ type TM =
     | TMText of string
     | TMVar of T
     | TMLitVar of T
-
 and T =
     | TyB
     | TyLit of Tokenize.Literal
@@ -54,15 +53,17 @@ and T =
     | TyFun of T * T * FunType
     | TyArray of T
     | TyNominal of GlobalId
-    | TyUnion of Map<int * string,T> * BlockParsing.UnionLayout
+    | TyUnion of Map<int * string,bool * T> * BlockParsing.UnionLayout // The boolean arg determines whether the union case is generalized.
     | TyApply of T * T * TT // Regular type functions (TyInl) get reduced, while this represents the staged reduction of nominals.
     | TyInl of Var * T
     | TyForall of Var * T
     | TyExists of Var list * T
     | TyMetavar of MVar * T option ref
-    | TyVar of Var
+    | TyVar of Var * T option ref
     | TyMacro of TM list
     | TyLayout of T * BlockParsing.Layout
+
+let tyvar x = TyVar(x, ref None)
 
 type TypeError =
     | KindError of TT * TT
@@ -74,12 +75,14 @@ type TypeError =
     | ModuleIndexFailedInOpen
     | TermError of T * T
     | TypeVarScopeError of string * T * T
+    | RecursiveMetavarsNotAllowed of T * T
     | ForallVarConstraintError of string * Constraint Set * Constraint Set
     | MetavarsNotAllowedInRecordWith
     | ExpectedRecord of T
     | ExpectedExistentialInTerm of T
     | ExpectedExistentialInPattern of T
     | UnexpectedNumberOfArgumentsInExistsPattern of got: int * expected: int
+    | UnexpectedNumberOfArgumentsInExistsBody of got: int * expected: int
     | ExistsShouldntHaveMetavars of T list
     | ExpectedRecordInsideALayout of T
     | UnionsCannotBeApplied
@@ -92,7 +95,6 @@ type TypeError =
     | ExpectedSymbol' of T
     | ExpectedSymbolInRecordWith of T
     | RealFunctionInTopDown
-    | BackendSwitchInTopDownSegment
     | ModuleMustBeImmediatelyApplied
     | MissingRecordFieldsInPattern of T * string list
     | CasePatternNotFoundForType of GlobalId * string
@@ -122,7 +124,6 @@ type TypeError =
     | InstanceVarShouldNotMatchAnyOfPrototypes
     | MissingBody
     | MacroIsMissingAnnotation
-    | BackendSwitchIsMissingAnnotation
     | ArrayIsMissingAnnotation
     | ExistsIsMissingAnnotation
     | ShadowedForall
@@ -132,6 +133,8 @@ type TypeError =
     | ShadowedInstance
     | UnusedTypeVariable of string list
     | CompilerError of string
+    | IncorrectGADTConstructorType
+    | IncorrectRecursiveNominal
 
 let inline shorten'<'a> (x : 'a) link next =
     let x' : 'a = next x
@@ -145,19 +148,25 @@ let inline shorten<'a> (x : 'a) link next =
     let x' : 'a = next x
     if System.Object.ReferenceEquals(x,x') = false then link := Some x'
     x'
-let rec visit_t = function
-    | TyComment(_,a) -> visit_t a
-    | TyMetavar(_,{contents=Some x} & link) -> shorten x link visit_t
+let rec visit_t_mvar = function
+    | TyComment(_,a) -> visit_t_mvar a
+    | TyMetavar(_,{contents=Some x} & link) -> shorten x link visit_t_mvar
     | a -> a
+
+let rec visit_t x = 
+    match visit_t_mvar x with
+    | TyVar(_,{contents=Some x}) -> visit_t x
+    | x -> x
 
 exception TypeErrorException of (VSCRange * TypeError) list
 
 let rec metavars = function
-    | RawTExists _ | RawTFilledNominal _ | RawTMacro _ | RawTVar _ | RawTTerm _ | RawTPrim _ | RawTWildcard _ | RawTLit _ | RawTB _ | RawTSymbol _ -> Set.empty
+    | RawTTypecase _ | RawTExists _ | RawTFilledNominal _ | RawTMacro _ | RawTVar _ | RawTTerm _ 
+    | RawTPrim _ | RawTWildcard _ | RawTLit _ | RawTB _ | RawTSymbol _ -> Set.empty
     | RawTMetaVar(_,a) -> Set.singleton a
     | RawTArray(_,a) | RawTLayout(_,a,_) | RawTForall(_,_,a) -> metavars a
     | RawTPair(_,a,b) | RawTApply(_,a,b) | RawTFun(_,a,b,_) -> metavars a + metavars b
-    | RawTUnion(_,l,_) -> Map.fold (fun s _ v -> s + metavars v) Set.empty l
+    | RawTUnion(_,l,_,this) -> Map.fold (fun s _ (_,v) -> s + metavars v) (metavars this) l
     | RawTRecord(_,l) -> Map.fold (fun s _ v -> s + metavars v) Set.empty l
 
 type TopEnv = {
@@ -237,18 +246,73 @@ let rec constraint_name (env : TopEnv) = function
     | CSymbol -> "symbol" | CRecord -> "record"
     | CPrototype i -> env.prototypes.[i].name
 
-let rec constraint_kind (env : TopEnv) = function
+let constraint_kind (env : TopEnv) = function
     | CSInt | CUInt | CInt | CFloat | CNumber | CPrim | CSymbol | CRecord -> KindType
     | CPrototype i -> env.prototypes.[i].kind
 
 let rec tt (env : TopEnv) = function
     | TyComment(_,x) | TyMetavar(_,{contents=Some x}) -> tt env x
     | TyNominal i -> env.nominals_aux.[i].kind
-    | TyApply(_,_,x) | TyMetavar({kind=x},_) | TyVar({kind=x}) -> x
+    | TyApply(_,_,x) | TyMetavar({kind=x},_) | TyVar({kind=x},_) -> x
     | TyExists _ | TyLit _ | TyUnion _ | TyLayout _ | TyMacro _ | TyB | TyPrim _ | TyForall _ | TyFun _ | TyRecord _ | TyModule _ | TyPair _ | TySymbol _ | TyArray _ -> KindType
     | TyInl(v,a) -> KindFun(v.kind,tt env a)
 
-let module_open (hover_types : ResizeArray<VSCRange * (T * Comments)>) (top_env : Env) (r : VSCRange) b l =
+let rec has_metavars x =
+    let f = has_metavars
+    match visit_t x with
+    | TyMetavar _ -> true
+    | TyVar _ | TyNominal _ | TyB | TyLit _ | TyPrim _ | TySymbol _ | TyModule _ -> false
+    | TyExists(_,a) | TyComment(_,a) | TyLayout(a,_) | TyForall(_,a) | TyInl(_,a) | TyArray a -> f a
+    | TyApply(a,b,_) | TyFun(a,b,_) | TyPair(a,b) -> f a || f b
+    | TyUnion(l,_) -> Map.exists (fun _ -> snd >> f) l
+    | TyRecord l -> Map.exists (fun _ -> f) l
+    | TyMacro a -> List.exists (function TMVar x -> has_metavars x | _ -> false) a
+
+// Eliminates the metavars in the type if possible.
+let rec term_subst a =
+    let f = term_subst
+    // 'a = 'b = ('c = int * 'd = float)
+    // visit_t shortens to:
+    // 'a = ('c = int * 'd = float)
+    // visit_t returns:
+    // ('c = int * 'd = float)
+    // term_subst returns:
+    // int * int
+    match visit_t a with
+    | TyMetavar _ | TyVar _ | TyNominal _ | TyB | TyLit _ | TyPrim _ | TySymbol _ as x -> x
+    | TyComment(a,b) -> TyComment(a,f b)
+    | TyPair(a,b) -> TyPair(f a, f b)
+    | TyRecord a -> TyRecord(Map.map (fun _ -> f) a)
+    | TyModule a -> TyModule(Map.map (fun _ -> f) a)
+    | TyUnion(a,b) -> TyUnion(Map.map (fun _ (is_gadt, x) -> is_gadt, f x) a,b)
+    | TyFun(a,b,t) -> TyFun(f a, f b, t)
+    | TyForall(a,b) -> TyForall(a,f b)
+    | TyExists(a,b) -> TyExists(a,f b)
+    | TyArray a -> TyArray(f a)
+    | TyApply(a,b,c) -> TyApply(f a, f b, c)
+    | TyInl(a,b) -> TyInl(a,f b)
+    | TyMacro a -> TyMacro(List.map (function TMVar x -> TMVar(f x) | x -> x) a)
+    | TyLayout(a,b) -> TyLayout(f a,b)
+
+type HoverTypes() =
+    // This is to allocate less trash for code that doesn't use GADTs. 
+    // Unfortunately, we cannot use memoization instead as term_subst is not functionally pure.
+    let rec has_substituted_tvars x = 
+        let f = has_substituted_tvars
+        match x with
+        | TyMetavar(_,{contents=Some _}) -> true
+        | TyVar (_, {contents=Some x}) | TyComment(_,x) -> f x
+        | TyVar _ | TyMetavar _ | TyNominal _ | TyB | TyLit _ | TyPrim _ | TySymbol _ | TyModule _ -> false
+        | TyExists(_,a) | TyComment(_,a) | TyLayout(a,_) | TyForall(_,a) | TyInl(_,a) | TyArray a -> f a
+        | TyApply(a,b,_) | TyFun(a,b,_) | TyPair(a,b) -> f a || f b
+        | TyUnion(l,_) -> Map.exists (fun _ -> snd >> f) l
+        | TyRecord l -> Map.exists (fun _ -> f) l
+        | TyMacro a -> List.exists (function TMVar x -> has_metavars x | _ -> false) a
+    let hover_types = ResizeArray()
+    member _.AddHover(r,(x,com)) = hover_types.Add(r,((if has_substituted_tvars x then term_subst x else x), com))
+    member _.ToArray() = hover_types.ToArray()
+
+let module_open (hover_types : HoverTypes option) (top_env : Env) (r : VSCRange) b l =
     let tryFind env x =
         match Map.tryFind x env.term, Map.tryFind x env.ty, Map.tryFind x env.constraints with
         | Some (TyModule a), Some (TyModule b), Some (M c) -> ValueSome {term=a; ty=b; constraints=c}
@@ -256,12 +320,12 @@ let module_open (hover_types : ResizeArray<VSCRange * (T * Comments)>) (top_env 
     match tryFind top_env b with
     | ValueNone -> Error(r, UnboundModule)
     | ValueSome env ->
-        if hover_types <> null then hover_types.Add(r,(TyModule env.term,""))
+        hover_types |> Option.iter (fun hover_types -> hover_types.AddHover(r,(TyModule env.term,"")))
         let rec loop env = function
             | (r,x) :: x' ->
                 match tryFind env x with
                 | ValueSome env ->
-                    if hover_types <> null then hover_types.Add(r,(TyModule env.term,""))
+                    hover_types |> Option.iter (fun hover_types -> hover_types.AddHover(r,(TyModule env.term,"")))
                     loop env x'
                 | _ -> Error(r, ModuleIndexFailedInOpen)
             | [] -> Ok env
@@ -296,12 +360,9 @@ let validate_bound_vars (top_env : Env) constraints term ty x =
                 | RawRecordWithInjectVar(v,e) | RawRecordWithInjectVarModify(v,e) -> check_term term v; cterm constraints (term, ty) e
                 ) b
             List.iter (function RawRecordWithoutSymbol _ -> () | RawRecordWithoutInjectVar (a,b) -> check_term term (a,b)) c
-            
-        | RawAnnot(_,RawOp(_,BackendSwitch,l),b) -> List.iter (cterm constraints (term, ty)) l; ctype constraints term ty b
-        | RawOp(r,BackendSwitch,l) -> errors.Add(r,BackendSwitchIsMissingAnnotation); List.iter (cterm constraints (term, ty)) l
         | RawOp(_,_,l) -> List.iter (cterm constraints (term, ty)) l
         | RawReal(_,x) | RawJoinPoint(_,_,x,_) -> cterm constraints (term, ty) x
-        | RawExists(_,a,b) -> Option.iter (List.iter (ctype constraints term ty)) a; cterm constraints (term, ty) b
+        | RawExists(_,(_,a),b) -> Option.iter (List.iter (ctype constraints term ty)) a; cterm constraints (term, ty) b
         | RawAnnot(_,RawMacro(_,a),b) -> cmacro constraints term ty a; ctype constraints term ty b
         | RawMacro(r,a) -> errors.Add(r,MacroIsMissingAnnotation); cmacro constraints term ty a
         | RawAnnot(_,RawArray(_,a),b) -> List.iter (cterm constraints (term, ty)) a; ctype constraints term ty b
@@ -314,7 +375,7 @@ let validate_bound_vars (top_env : Env) constraints term ty x =
                 cterm constraints (term, ty + metavars a) b
                 ) b
         | RawOpen(_,(a,b),l,on_succ) ->
-            match module_open null top_env a b l with
+            match module_open None top_env a b l with
             | Ok x ->
                 let combine e m = Map.fold (fun s k _ -> Set.add k s) e m
                 cterm (Map.foldBack Map.add x.constraints constraints) (combine term x.term, combine ty x.ty) on_succ
@@ -332,10 +393,16 @@ let validate_bound_vars (top_env : Env) constraints term ty x =
     and ctype constraints term ty x =
         match x with
         | RawTFilledNominal(_,_) | RawTPrim _ | RawTWildcard _ | RawTLit _ | RawTB _ | RawTSymbol _ | RawTMetaVar _ -> ()
+        | RawTTypecase(_,a,b) -> 
+            ctype constraints term ty a
+            List.iter (fun (a,b) -> 
+                ctype constraints term ty a
+                ctype constraints term (ty + metavars a) b
+                ) b
         | RawTVar(a,b) -> check_ty ty (a,b)
         | RawTArray(_,a) | RawTLayout(_,a,_) -> ctype constraints term ty a
         | RawTPair(_,a,b) | RawTApply(_,a,b) | RawTFun(_,a,b,_) -> ctype constraints term ty a; ctype constraints term ty b
-        | RawTUnion(_,l,_) -> Map.iter (fun _ -> ctype constraints term ty) l
+        | RawTUnion(_,l,_,this) -> Map.iter (fun _ (_,x) -> ctype constraints term ty x) l; ctype constraints term ty this
         | RawTRecord(_,l) -> Map.iter (fun _ -> ctype constraints term ty) l
         | RawTForall(_,((_,(a,_)),l),b) -> List.iter (check_cons constraints) l; ctype constraints term (Set.add a ty) b
         | RawTExists(_,a,b) -> 
@@ -384,23 +451,26 @@ let assert_bound_vars (top_env : Env) constraints term ty x =
 
 let rec subst (m : (Var * T) list) x =
     let f = subst m
-    match x with
-    | TyComment(_,x)
-    | TyMetavar(_,{contents=Some x}) -> f x // Don't do path shortening here.
-    | TyMetavar _ | TyNominal _ | TyB | TyLit _ | TyPrim _ | TySymbol _ -> x
-    | TyPair(a,b) -> TyPair(f a, f b)
-    | TyRecord a -> TyRecord(Map.map (fun _ -> f) a)
-    | TyModule a -> TyModule(Map.map (fun _ -> f) a)
-    | TyUnion(a,b) -> TyUnion(Map.map (fun _ -> f) a,b)
-    | TyFun(a,b,t) -> TyFun(f a, f b, t)
-    | TyArray a -> TyArray(f a)
-    | TyApply(a,b,c) -> TyApply(f a, f b, c)
-    | TyVar a -> List.tryPick (fun (v,x) -> if a = v then Some x else None) m |> Option.defaultValue x
-    | TyForall(a,b) -> TyForall(a, f b)
-    | TyExists(a,b) -> TyExists(a, f b)
-    | TyInl(a,b) -> TyInl(a, f b)
-    | TyMacro a -> TyMacro(List.map (function TMVar x -> TMVar(f x) | x -> x) a)
-    | TyLayout(a,b) -> TyLayout(f a,b)
+    if List.isEmpty m then x 
+    else 
+        match x with
+        | TyComment(_,x)
+        | TyMetavar(_,{contents=Some x}) 
+        | TyVar (_,{contents=Some x}) -> f x // Don't do path shortening here.
+        | TyMetavar _ | TyNominal _ | TyB | TyLit _ | TyPrim _ | TySymbol _ -> x
+        | TyPair(a,b) -> TyPair(f a, f b)
+        | TyRecord a -> TyRecord(Map.map (fun _ -> f) a)
+        | TyModule a -> TyModule(Map.map (fun _ -> f) a)
+        | TyUnion(a,b) -> TyUnion(Map.map (fun _ (is_gadt,body) -> is_gadt, f body) a,b)
+        | TyFun(a,b,t) -> TyFun(f a, f b, t)
+        | TyArray a -> TyArray(f a)
+        | TyApply(a,b,c) -> TyApply(f a, f b, c)
+        | TyVar (a,_) -> List.tryPick (fun (v,x) -> if a = v then Some x else None) m |> Option.defaultValue x
+        | TyForall(a,b) -> TyForall(a, f b)
+        | TyExists(a,b) -> TyExists(a, f b)
+        | TyInl(a,b) -> TyInl(a, f b)
+        | TyMacro a -> TyMacro(List.map (function TMVar x -> TMVar(f x) | x -> x) a)
+        | TyLayout(a,b) -> TyLayout(f a,b)
 
 let type_apply_split x =
     let rec loop s x =
@@ -413,25 +483,6 @@ let rec kind_subst = function
     | KindMetavar ({contents'=Some x} & link) -> shorten' x link kind_subst
     | KindMetavar _ | KindType as x -> x
     | KindFun(a,b) -> KindFun(kind_subst a,kind_subst b)
-
-let rec term_subst x =
-    let f = term_subst
-    match x with
-    | TyMetavar(_,{contents=Some x} & link) -> shorten x link f
-    | TyMetavar _ | TyVar _ | TyNominal _ | TyB | TyLit _ | TyPrim _ | TySymbol _ as x -> x
-    | TyComment(a,b) -> TyComment(a,f b)
-    | TyPair(a,b) -> TyPair(f a, f b)
-    | TyRecord a -> TyRecord(Map.map (fun _ -> f) a)
-    | TyModule a -> TyModule(Map.map (fun _ -> f) a)
-    | TyUnion(a,b) -> TyUnion(Map.map (fun _ -> f) a,b)
-    | TyFun(a,b,t) -> TyFun(f a, f b, t)
-    | TyForall(a,b) -> TyForall(a,f b)
-    | TyExists(a,b) -> TyExists(a,f b)
-    | TyArray a -> TyArray(f a)
-    | TyApply(a,b,c) -> TyApply(f a, f b, c)
-    | TyInl(a,b) -> TyInl(a,f b)
-    | TyMacro a -> TyMacro(List.map (function TMVar x -> TMVar(f x) | x -> x) a)
-    | TyLayout(a,b) -> TyLayout(f a,b)
 
 let rec foralls_get = function
     | RawForall(_,a,b) -> let a', b = foralls_get b in a :: a', b
@@ -446,17 +497,6 @@ let rec kind_force = function
     | KindMetavar link -> let x = KindType in link.contents' <- Some x; x
     | KindType as x -> x
     | KindFun(a,b) -> KindFun(kind_force a,kind_force b)
-
-let rec has_metavars x =
-    let f = has_metavars
-    match visit_t x with
-    | TyMetavar _ -> true
-    | TyVar _ | TyNominal _ | TyB | TyLit _ | TyPrim _ | TySymbol _ | TyModule _ -> false
-    | TyExists(_,a) | TyComment(_,a) | TyLayout(a,_) | TyForall(_,a) | TyInl(_,a) | TyArray a -> f a
-    | TyApply(a,b,_) | TyFun(a,b,_) | TyPair(a,b) -> f a || f b
-    | TyUnion(l,_) -> Map.exists (fun _ -> f) l
-    | TyRecord l -> Map.exists (fun _ -> f) l
-    | TyMacro a -> List.exists (function TMVar x -> has_metavars x | _ -> false) a
 
 let p prec prec' x = if prec < prec' then x else sprintf "(%s)" x
 let show_kind x =
@@ -481,9 +521,9 @@ let show_t (env : TopEnv) x =
     let rec f prec x =
         let p = p prec
         match x with
-        | TyComment(_,x) | TyMetavar(_,{contents=Some x}) -> f prec x
+        | TyVar (_, {contents=Some x}) | TyComment(_,x) | TyMetavar(_,{contents=Some x}) -> f prec x
         | TyMetavar _ -> "_"
-        | TyVar a -> a.name
+        | TyVar (a, _) -> a.name
         | TyNominal i ->
             match Map.tryFind i env.nominals_aux with
             | Some x when prec < 0 -> sprintf "(%s : %s)" x.name (show_kind x.kind)
@@ -528,8 +568,8 @@ let show_t (env : TopEnv) x =
                     )
                 |> String.concat "\n"
             else "module"
-        | TyRecord l -> sprintf "{%s}" (l |> Map.toList |> List.map (fun ((i,k),v) -> sprintf "%s{%d} : %s" k i (f -1 v)) |> String.concat "; ")
-        | TyUnion(l,_) -> sprintf "{%s}" (l |> Map.toList |> List.map (fun ((_,k),v) -> sprintf "%s : %s" k (f -1 v)) |> String.concat "| ")
+        | TyRecord l -> sprintf "{%s}" (l |> Map.toList |> List.map (fun ((_,k),v) -> sprintf "%s : %s" k (f -1 v)) |> String.concat "; ")
+        | TyUnion(l,_) -> sprintf "{%s}" (l |> Map.toList |> List.map (fun ((_,k),(_,v)) -> sprintf "%s : %s" k (f -1 v)) |> String.concat "| ")
         | TyMacro a -> p 30 (List.map (function TMLitVar a | TMVar a -> f -1 a | TMText a -> a) a |> String.concat "")
         | TyLayout(a,b) -> p 30 (sprintf "%s %s" (show_layout_type b) (f 30 a))
 
@@ -538,10 +578,12 @@ let show_t (env : TopEnv) x =
 let show_type_error (env : TopEnv) x =
     let f = show_t env
     match x with
-    | BackendSwitchIsMissingAnnotation -> "The backend switch is missing an annotation."
+    | IncorrectRecursiveNominal -> "The non-recursive nominals should not use their own type in the clause."
+    | IncorrectGADTConstructorType -> "The GADT case in the union has to result in an instance of the union being constructed. Any type other than the self being in the range of the union is not allowed."
     | ExistsShouldntHaveMetavars a -> sprintf "The variables of the exists body shouldn't have metavariables left over in them.\nGot: [%s]"  (List.map f a |> String.concat ", ")
     | ExpectedExistentialInPattern a -> sprintf "The variable being destructured in the pattern match need to be explicitly annotated and with an existential type.\nGot: %s" (f a)
     | UnexpectedNumberOfArgumentsInExistsPattern(got,exp) -> sprintf "The number of arguments in the existential pattern doesn't match the one in the type.\nGot: %i\nExpected: %i" got exp
+    | UnexpectedNumberOfArgumentsInExistsBody(got,exp) -> sprintf "The number of arguments in the existential body doesn't match the one in the type.\nGot: %i\nExpected: %i" got exp
     | ExpectedExistentialInTerm a -> sprintf "The body of `expects` need to be explicitly annotated and with an existential type.\nGot: %s" (f a)
     | UnionsCannotBeApplied -> "Unions cannot be applied."
     | ExpectedNominalInApply a -> sprintf "Expected a nominal.\nGot: %s" (f a)
@@ -551,6 +593,7 @@ let show_type_error (env : TopEnv) x =
     | KindError(a,b) -> sprintf "Kind unification failure.\nGot:      %s\nExpected: %s" (show_kind a) (show_kind b)
     | KindErrorInConstraint(a,b) -> sprintf "Kind unification failure when propagating them from constraints.\nGot:      %s\nExpected: %s" (show_kind a) (show_kind b)
     | TermError(a,b) -> sprintf "Unification failure.\nGot:      %s\nExpected: %s" (f a) (f b)
+    | RecursiveMetavarsNotAllowed(a,b) -> sprintf "Recursive metavariables are not allowed. A metavar cannot be unified with a type that has itself.\nGot:      %s\nExpected: %s" (f a) (f b)
     | ExpectedSymbolAsRecordKey a -> sprintf "Expected symbol as a record key.\nGot: %s" (f a)
     | ExpectedSymbolAsModuleKey a -> sprintf "Expected symbol as a module key.\nGot: %s" (f a)
     | UnboundVariable x -> sprintf "Unbound variable: %s." x
@@ -567,7 +610,6 @@ let show_type_error (env : TopEnv) x =
     | ExpectedModule a -> sprintf "Expected a module.\nGot: %s" (f a)
     | ExpectedSymbolInRecordWith a -> sprintf "Expected a symbol.\nGot: %s" (f a)
     | RealFunctionInTopDown -> sprintf "Real segment functions are forbidden in the top-down segment. They can only be used in `real` expressions or .spir modules."
-    | BackendSwitchInTopDownSegment -> sprintf "BackendSwitch needs to be used in the real segment. It isn't allowed in the top down one."
     | MissingRecordFieldsInPattern(a,b) -> sprintf "The record is missing the following fields: %s.\nGot: %s" (String.concat ", " b) (f a)
     | CasePatternNotFoundForType(i,n) -> sprintf "%s does not have the %s case." (show_nominal env i) n
     | CasePatternNotFound n -> sprintf "Cannot find a function with the same name as the %s case in the environment." n
@@ -655,6 +697,93 @@ type [<ReferenceEquality>] InferResult = {
     errors : RString list
     }
 
+let dispose_gadt_links gadt_links = Seq.iter (fun x -> x := None) gadt_links
+
+let assert_foralls_used' outside_foralls (errors : (VSCRange * TypeError) ResizeArray) r x =
+    let h = HashSet()
+    let rec f = function
+        | TyVar (_,{contents=Some x}) -> f x
+        | TyVar (v,_) -> Set.singleton v.name
+        | TyExists(v,a) ->
+            List.fold (fun a v -> 
+                if Set.contains v.name a = false then h.Add(v.name) |> ignore; a
+                else Set.remove v.name a
+                ) (f a) v
+        | TyForall(v,a) ->
+            let a = f a
+            if Set.contains v.name a = false then h.Add(v.name) |> ignore; a
+            else Set.remove v.name a
+        | TyModule _ | TyMetavar _ | TyNominal _ | TyB | TyLit _ | TyPrim _ | TySymbol _ -> Set.empty
+        | TyPair(a,b) | TyApply(a,b,_) | TyFun(a,b,_) -> f a + f b
+        | TyUnion(a,_) -> Map.fold (fun s _ (_,x) -> Set.union s (f x)) Set.empty a
+        | TyRecord a -> Map.fold (fun s _ x -> Set.union s (f x)) Set.empty a
+        | TyComment(_,a) | TyLayout(a,_) | TyInl(_,a) | TyArray a -> f a
+        | TyMacro a -> 
+            List.fold (fun s x ->
+                match x with
+                | TMLitVar a | TMVar a -> f a 
+                | TMText _ -> Set.empty
+                ) Set.empty a
+    let used_vars = f x
+    Seq.iter (h.Add >> ignore) (outside_foralls - used_vars)
+    if 0 < h.Count then
+        errors.Add(r, UnusedTypeVariable (Seq.toList h))
+
+let assert_foralls_used (errors : _ ResizeArray) r x = assert_foralls_used' Set.empty errors r x
+
+let validate_nominal (errors : _ ResizeArray) global_id body v =
+    // Stack union types and regular nominals must not be recursive.
+    // Unlike in the previous version of Spiral which simply didn't put the nominal type in the environment
+    // this one has to do it becaus the GADT constructors need access to it.
+    let rec assert_nominal_non_recursive v =
+        let f = assert_nominal_non_recursive
+        match visit_t v with
+        | TyNominal global_id' -> if global_id = global_id' then errors.Add(range_of_texpr_gadt_body body, IncorrectRecursiveNominal)
+        | TyMetavar _ | TyVar _ -> ()
+        | TyB | TyLit _ | TyPrim _ | TySymbol _ -> ()
+        | TyPair(a,b) | TyApply(a,b,_) | TyFun(a,b,_) -> f a; f b
+        | TyUnion(a,_) -> Map.iter (fun _ -> snd >> f) a
+        | TyRecord a -> Map.iter (fun _ -> f) a
+        | TyExists(_,a) | TyComment(_,a) | TyLayout(a,_) | TyForall(_,a) | TyInl(_,a) | TyArray a -> f a
+        | TyMacro a -> List.iter (function TMLitVar a | TMVar a -> f a | TMText _ -> ()) a
+        | TyModule _ -> ()
+    match v with // Validates the union type.
+    | TyUnion(a,b) ->
+        a |> Map.iter (fun name (is_gadt, v) -> 
+            let body =
+                match body with
+                | RawTUnion(_,a,_,_) -> Map.find name a |> snd
+                | _ -> failwith "Compiler error: Expected an union."
+            let is_stack = b = UStack
+
+            // Makes sure that the GADT constructor is resulting in its own type.
+            // Also make sure that it's not using an instance of itself in its constructor other than in first position.
+            let rec assert_gadt_has_proper_specialized_constructor = function
+                | TyNominal global_id' -> if global_id <> global_id' then errors.Add(range_of_texpr_gadt_constructor body, IncorrectGADTConstructorType)
+                | TyApply(a,b,_) -> 
+                    assert_gadt_has_proper_specialized_constructor a
+                    if is_stack then assert_nominal_non_recursive b
+                | _ -> errors.Add(range_of_texpr_gadt_constructor body, IncorrectGADTConstructorType)
+
+            let assert_gadt_is_valid v =
+                let rec find_gadt_constructor outside_foralls = function
+                    | TyForall(n,t) -> find_gadt_constructor (Set.add n.name outside_foralls) t
+                    | TyFun(a,b,_) -> 
+                        if is_stack then assert_nominal_non_recursive a
+                        assert_gadt_has_proper_specialized_constructor b
+                        assert_foralls_used' outside_foralls errors (range_of_texpr_gadt_constructor body) b
+                    | b ->
+                        assert_gadt_has_proper_specialized_constructor b
+                        assert_foralls_used' outside_foralls errors (range_of_texpr_gadt_constructor body) b
+                        
+                find_gadt_constructor Set.empty v
+                    
+            if is_gadt then assert_gadt_is_valid v
+            elif is_stack then assert_nominal_non_recursive v
+            )
+    | _ ->
+        assert_nominal_non_recursive v
+
 open Spiral.BlockBundling
 let infer package_id module_id (top_env' : TopEnv) expr =
     let at_tag i = {package_id=package_id; module_id=module_id; tag=i}
@@ -665,15 +794,18 @@ let infer package_id module_id (top_env' : TopEnv) expr =
     let module_type_apply_args = Dictionary(HashIdentity.Reference)
     let annotations = Dictionary<obj,_>(HashIdentity.Reference)
     let exists_vars = Dictionary<obj,_>(HashIdentity.Reference)
+    let gadt_typecases = Dictionary<obj,_>(HashIdentity.Reference)
+    let mutable autogened_forallvar_count = 0
+    let hover_types = HoverTypes()
 
     /// Fills in the type applies and annotations, and generalizes statements. Also strips annotations from terms and patterns.
     /// Dealing with recursive statement type applies requires some special consideration.
     let fill r rec_term expr =
         assert (0 = errors.Count)
-        let t_to_rawtexpr r expr =
+        let t_to_rawtexpr r vars_to_metavars expr =
             let rec f x =
                 match visit_t x with
-                | TyMetavar _  | TyForall _  | TyInl _  | TyModule _ as x -> failwithf "Compiler error: These cases should not appear in fill.\nGot: %A" x
+                | TyUnion _ | TyMetavar _  | TyForall _  | TyInl _  | TyModule _ as x -> failwithf "Compiler error: These cases should not appear in fill.\nGot: %A" x
                 | TyComment(_,x) -> f x
                 | TyB -> RawTB r
                 | TyLit x -> RawTLit(r,x)
@@ -685,20 +817,30 @@ let infer package_id module_id (top_env' : TopEnv) expr =
                 | TyExists(a,b) -> RawTExists(r,a |> List.map (fun n -> (r,(n.name,RawKindWildcard)),[]), f b)
                 | TyArray a -> RawTArray(r,f a)
                 | TyNominal i -> RawTFilledNominal(r,i)
-                | TyUnion(a,b) -> RawTUnion(r,Map.map (fun _ -> f) a,b)
                 | TyApply(a,b,_) -> RawTApply(r,f a,f b)
-                | TyVar a -> RawTVar(r,a.name)
+                | TyVar (a,_) -> 
+                    let is_typecase_metavar = List.tryFind (function TyVar(b,_) -> a = b | _ -> failwith "Compiler error: Expected a TyVar.") vars_to_metavars |> Option.isSome
+                    if is_typecase_metavar then RawTMetaVar(r,a.name) else RawTVar(r,a.name)
                 | TyMacro l -> l |> List.map (function TMText x -> RawMacroText(r,x) | TMVar x -> RawMacroType(r,f x) | TMLitVar x -> RawMacroTypeLit(r,f x)) |> fun l -> RawTMacro(r,l)
                 | TyLayout(a,b) -> RawTLayout(r,f a,b)
             f expr
-        let annot r x = t_to_rawtexpr r (snd annotations.[x])
+        let fill_typecases x =
+            match gadt_typecases.TryGetValue(x) with
+            | true, typecase_data ->
+                Seq.foldBack (fun (typecase_cond,forall_vars,typecase_constructor) typecase_body ->
+                    let r = range_of_expr typecase_body
+                    RawTypecase(r, t_to_rawtexpr r [] typecase_cond, [t_to_rawtexpr r forall_vars typecase_constructor, typecase_body])
+                    ) typecase_data x
+            | _ ->
+                x
+        let annot r x = t_to_rawtexpr r [] (snd annotations.[x])
         let rec fill_foralls r rec_term body =
             let _,body = foralls_get body
             let l,_ = foralls_ty_get generalized_statements.[body]
             List.foldBack (fun (x : Var) s -> RawFilledForall(r,x.name,s)) l (term rec_term body)
         and term rec_term x =
             let f = term rec_term
-            let clauses l = List.map (fun (a, b) -> let rec_term,a = pattern rec_term a in a,term rec_term b) l
+            let clauses l = List.map (fun (a, b) -> let rec_term,a = pattern rec_term a in a,fill_typecases (term rec_term b)) l
             match x with
             | RawFilledForall _ | RawMissingBody _ | RawTypecase _ | RawType _ as x -> failwithf "Compiler error: These cases should not appear in fill. It is intended to be called on top level statements only.\nGot: %A" x
             | RawSymbol _ | RawB _ | RawLit _ | RawOp _ -> x
@@ -709,16 +851,16 @@ let infer package_id module_id (top_env' : TopEnv) expr =
                     match Map.tryFind n rec_term with
                     | None -> fst type_apply_args
                     | Some t -> t |> snd type_apply_args
-                    |> List.fold (fun s x -> RawApply(r,s,RawType(r,t_to_rawtexpr r x))) x
+                    |> List.fold (fun s x -> RawApply(r,s,RawType(r,t_to_rawtexpr r [] x))) x
                 | _ -> x
             | RawDefaultLit(r,_) -> RawAnnot(r,x,annot r x)
             | RawForall(r,a,b) -> RawForall(r,a,f b)
             | RawMatch(r'',(RawForall _ | RawFun _) & body,[PatVar(r,name), on_succ]) ->
                 let _,body = foralls_get body
-                RawMatch(r'',fill_foralls r rec_term body,[PatVar(r,name), term (Map.remove name rec_term) on_succ])
+                RawMatch(r'',fill_foralls r rec_term body,[PatVar(r,name), fill_typecases (term (Map.remove name rec_term) on_succ)])
             | RawMatch(r,a,b) -> RawMatch(r,f a,clauses b)
             | RawFun(r,a) -> RawAnnot(r,RawFun(r,clauses a),annot r x)
-            | RawExists(r,a,b) -> RawExists(r,Some(Option.defaultWith (fun () -> List.map (t_to_rawtexpr r) exists_vars.[x]) a),f b)
+            | RawExists(r,(r',a),b) -> RawExists(r,(r',Some(Option.defaultWith (fun () -> List.map (t_to_rawtexpr r []) exists_vars.[x]) a)),f b)
             | RawRecBlock(r,l,on_succ) ->
                 let has_foralls = List.exists (function (_,RawForall _) -> true | _ -> false) l
                 if has_foralls then RawRecBlock(r,List.map (fun (a,b) -> a, f b) l,f on_succ)
@@ -744,7 +886,7 @@ let infer package_id module_id (top_env' : TopEnv) expr =
             | RawApply(r,a,b) ->
                 let q = RawApply(r,f a,f b)
                 match module_type_apply_args.TryGetValue(x) with
-                | true, typevars -> List.fold (fun a b -> RawApply(r,a,RawType(r,t_to_rawtexpr r b))) q typevars
+                | true, typevars -> List.fold (fun a b -> RawApply(r,a,RawType(r,t_to_rawtexpr r [] b))) q typevars
                 | _ -> q
             | RawIfThenElse(r,a,b,c) -> RawIfThenElse(r,f a,f b,f c)
             | RawIfThen(r,a,b) -> RawIfThen(r,f a,f b)
@@ -784,10 +926,6 @@ let infer package_id module_id (top_env' : TopEnv) expr =
         assert (0 = errors.Count)
         x
 
-    let autogened_forallvar_count = ref 0
-
-    let hover_types = ResizeArray()
-
     let fresh_kind () = KindMetavar {contents'=None}
     let fresh_var'' x = TyMetavar (x, ref None)
     let fresh_var' scope kind = fresh_var'' {scope=scope; constraints=Set.empty; kind=kind}
@@ -799,47 +937,15 @@ let infer package_id module_id (top_env' : TopEnv) expr =
                 let v = fresh_subst_var scope a.constraints a.kind
                 let type_apply_args,b = loop ((a, v) :: m) b
                 v :: type_apply_args, b
-            | x -> [], if List.isEmpty m then x else subst m x
+            | x -> [], subst m x
         loop [] x
 
     let exists_subst_term scope (l : Var list, body) =
         let vars = l |> List.map (fun a -> fresh_subst_var scope a.constraints a.kind)
         vars, subst (List.zip l vars) body
 
-    let exists_subst_pattern scope names (l,body) =
-        let vars = (names, l) ||> List.map2 (fun (_,name) l -> TyVar {l with scope=scope; name=name})
-        vars, subst (List.zip l vars) body
-
     let assert_exists_hasnt_metavars r vars =
         if List.exists has_metavars vars then errors.Add(r, ExistsShouldntHaveMetavars vars)
-
-    let assert_foralls_used r x =
-        let h = HashSet()
-        let rec f = function
-            | TyVar v -> Set.singleton v.name
-            | TyExists(v,a) ->
-                List.fold (fun a v -> 
-                    if Set.contains v.name a = false then h.Add(v.name) |> ignore; a
-                    else Set.remove v.name a
-                    ) (f a) v
-            | TyForall(v,a) -> 
-                let a = f a
-                if Set.contains v.name a = false then h.Add(v.name) |> ignore; a
-                else Set.remove v.name a
-            | TyModule _ | TyMetavar _ | TyNominal _ | TyB | TyLit _ | TyPrim _ | TySymbol _ -> Set.empty
-            | TyPair(a,b) | TyApply(a,b,_) | TyFun(a,b,_) -> f a + f b
-            | TyUnion(a,_) -> Map.fold (fun s _ x -> Set.union s (f x)) Set.empty a
-            | TyRecord a -> Map.fold (fun s _ x -> Set.union s (f x)) Set.empty a
-            | TyComment(_,a) | TyLayout(a,_) | TyInl(_,a) | TyArray a -> f a
-            | TyMacro a -> 
-                List.fold (fun s x ->
-                    match x with
-                    | TMLitVar a | TMVar a -> f a 
-                    | TMText _ -> Set.empty
-                    ) Set.empty a
-        let _ = f x
-        if 0 < h.Count then
-            errors.Add(r, UnusedTypeVariable (Seq.toList h))
 
     let generalize r scope (forall_vars : Var list) (body : T) =
         let h = HashSet(HashIdentity.Reference)
@@ -848,17 +954,18 @@ let infer package_id module_id (top_env' : TopEnv) expr =
         let rec replace_metavars x =
             let f = replace_metavars
             match x with
-            | TyMetavar(_,{contents=Some x} & link) -> f x
+            | TyVar (_,{contents=Some x})
+            | TyMetavar(_,{contents=Some x}) -> f x
             | TyMetavar(x, link) when scope = x.scope ->
-                let v = TyVar {scope=x.scope; constraints=x.constraints; kind=kind_force x.kind; name=autogen_name !autogened_forallvar_count}
-                incr autogened_forallvar_count
+                let v = tyvar {scope=x.scope; constraints=x.constraints; kind=kind_force x.kind; name=autogen_name autogened_forallvar_count}
+                autogened_forallvar_count <- autogened_forallvar_count+1
                 link := Some v
                 replace_metavars v
             // This scheme with the HashSet is so generalize works for mutually recursive statements.
-            | TyVar v -> if scope = v.scope && h.Add(v) then generalized_metavars.Add(v)
+            | TyVar (v,_) -> if scope = v.scope && h.Add(v) then generalized_metavars.Add(v)
             | TyMetavar _ | TyNominal _ | TyB | TyLit _ | TyPrim _ | TySymbol _ -> ()
             | TyPair(a,b) | TyApply(a,b,_) | TyFun(a,b,_) -> f a; f b
-            | TyUnion(a,_) -> Map.iter (fun _ -> f) a
+            | TyUnion(a,_) -> Map.iter (fun _ -> snd >> f) a
             | TyRecord a -> Map.iter (fun _ -> f) a
             | TyExists(_,a) | TyComment(_,a) | TyLayout(a,_) | TyForall(_,a) | TyInl(_,a) | TyArray a -> f a
             | TyMacro a -> List.iter (function TMLitVar a | TMVar a -> f a | TMText _ -> ()) a
@@ -867,8 +974,24 @@ let infer package_id module_id (top_env' : TopEnv) expr =
         let f x s = TyForall(x,s)
         replace_metavars body
         let x = Seq.foldBack f generalized_metavars body |> List.foldBack f forall_vars |> term_subst
-        if List.isEmpty forall_vars = false then assert_foralls_used r x
+        if List.isEmpty forall_vars = false then assert_foralls_used errors r x
         x
+
+    let gadt_extract scope (v : T) =
+        let forall_subst_all_gadt x =
+            let rec loop m x = 
+                match visit_t x with
+                | TyForall(a,b) ->
+                    let v = tyvar {a with name=autogen_name autogened_forallvar_count; scope=scope}
+                    autogened_forallvar_count <- autogened_forallvar_count+1
+                    let type_apply_args,b = loop ((a, v) :: m) b
+                    v :: type_apply_args, b
+                | x -> [], subst m x
+            loop [] x
+        let forall_vars,v = forall_subst_all_gadt v
+        match v with
+        | TyFun(a,b,_) -> forall_vars,a,b
+        | b -> forall_vars,TyB,b
 
     let inline unify_kind' er r got expected =
         let rec loop (a'',b'') =
@@ -880,7 +1003,7 @@ let infer package_id module_id (top_env' : TopEnv) expr =
             | _ -> raise (TypeErrorException [r, er (got, expected)])
         loop (got, expected)
     let unify_kind r got expected = try unify_kind' KindError r got expected with :? TypeErrorException as e -> errors.AddRange e.Data0
-    let unify (r : VSCRange) (got : T) (expected : T) : unit =
+    let unify_gadt (gadt_links : T option ref ResizeArray option) (r : VSCRange) (got : T) (expected : T) : unit =
         let unify_kind got expected = unify_kind' KindError r got expected
         let er () = raise (TypeErrorException [r, TermError(got, expected)])
 
@@ -910,7 +1033,8 @@ let infer package_id module_id (top_env' : TopEnv) expr =
                 | con, x -> [ConstraintError(con,x)]
 
             match b with
-            | TyVar b -> if con.IsSubsetOf b.constraints = false then [ForallVarConstraintError(b.name,con,b.constraints)] else []
+            | TyVar (_,{contents=Some x}) -> constraint_process con x
+            | TyVar (b,_) -> if con.IsSubsetOf b.constraints = false then [ForallVarConstraintError(b.name,con,b.constraints)] else []
             | b ->
                 let b_kind = tt top_env b
                 Set.fold (fun ers con ->
@@ -918,7 +1042,7 @@ let infer package_id module_id (top_env' : TopEnv) expr =
                     List.append (body (con,b)) ers
                     ) [] con
 
-        // Does occurs checking.
+        // Does occurs checking for recursive metavariables.
         // Does scope checking in forall vars.
         let rec validate_unification i x =
             let f = validate_unification i
@@ -927,24 +1051,13 @@ let infer package_id module_id (top_env' : TopEnv) expr =
             | TyMacro a -> a |> List.iter (function TMText _ -> () | TMLitVar a | TMVar a -> f a)
             | TyExists(_,a) | TyComment(_,a) | TyForall(_,a) | TyInl(_,a) | TyArray a -> f a
             | TyApply(a,b,_) | TyFun(a,b,_) | TyPair(a,b) -> f a; f b
-            | TyUnion(l,_) -> Map.iter (fun _ -> f) l
+            | TyUnion(l,_) -> Map.iter (fun _ -> snd >> f) l
             | TyRecord l -> Map.iter (fun _ -> f) l
-            | TyVar b -> if i.scope < b.scope then raise (TypeErrorException [r,TypeVarScopeError(b.name,got,expected)])
-            | TyMetavar(x,_) -> if i = x then er() elif i.scope < x.scope then x.scope <- i.scope
+            | TyVar(b,_) -> if i.scope < b.scope then raise (TypeErrorException [r,TypeVarScopeError(b.name,got,expected)])
+            | TyMetavar(x,_) -> if i = x then raise (TypeErrorException [r,RecursiveMetavarsNotAllowed(got,expected)]) elif i.scope < x.scope then x.scope <- i.scope
             | TyLayout(a,_) -> f a
 
-        let rec loop (a'',b'') =
-            let record l l' =
-                let a,b = Map.toArray l, Map.toArray l'
-                if a.Length <> b.Length then er ()
-                else
-                    let a = a |> Array.sortBy (fun ((_,k),_) -> k)
-                    let b = b |> Array.sortBy (fun ((_,k),_) -> k)
-                    Array.iter2 (fun (ka,a) (kb,b) ->
-                        if (ka |> snd) = (kb |> snd)
-                        then loop (a,b)
-                        else er()
-                    ) a b
+        let rec loop (a'',b'') = 
             match visit_t a'', visit_t b'' with
             | TyComment(_,a), b | a, TyComment(_,b) -> loop (a,b)
             | TyMetavar(a,link), TyMetavar(b,_) & b' ->
@@ -959,12 +1072,25 @@ let infer package_id module_id (top_env' : TopEnv) expr =
                 match constraint_process a.constraints b with
                 | [] -> link := Some b
                 | constraint_errors -> raise (TypeErrorException (List.map (fun x -> r,x) constraint_errors))
-            | TyVar a, TyVar b when a = b -> ()
+            | TyVar (a,_), TyVar (b,_) when a = b -> ()
+            | TyVar (a,link), b | b, TyVar (a,link) when gadt_links.IsSome ->
+                unify_kind a.kind (tt top_env b)
+                match constraint_process a.constraints b with
+                | [] -> link := Some b; gadt_links.Value.Add(link)
+                | constraint_errors -> raise (TypeErrorException (List.map (fun x -> r,x) constraint_errors))
             | TyFun(a,a',ta), TyFun(b,b',tb) when ta = tb -> loop (a,b); loop (a',b')
             | TyPair(a,a'), TyPair(b,b') -> loop (a,b); loop (a',b')
             | TyApply(a,a',_), TyApply(b,b',_) -> loop (a',b'); loop (a,b)
-            | TyUnion(l,q), TyUnion(l',q') -> if q = q' then record l l' else raise (TypeErrorException [r,UnionTypesMustHaveTheSameLayout])
-            | TyRecord a, TyRecord a' -> record a a'
+            | TyUnion(l,q), TyUnion(l',q') -> 
+                if q = q' then
+                    let a,b = Map.toArray l, Map.toArray l'
+                    if a.Length <> b.Length then er ()
+                    else Array.iter2 (fun (ka,a) (kb,b) -> if ka = kb && fst a = fst b then loop (snd a,snd b) else er()) a b
+                else raise (TypeErrorException [r,UnionTypesMustHaveTheSameLayout])
+            | TyRecord l, TyRecord l' -> 
+                let a,b = Map.toArray l, Map.toArray l'
+                if a.Length <> b.Length then er ()
+                else Array.iter2 (fun (ka,a) (kb,b) -> if ka = kb then loop (a,b) else er()) a b
             | TyNominal i, TyNominal i' when i = i' -> ()
             | TyB, TyB -> ()
             | TyPrim x, TyPrim x' when x = x' -> ()
@@ -973,11 +1099,11 @@ let infer package_id module_id (top_env' : TopEnv) expr =
             | TyArray a, TyArray b -> loop (a,b)
             // Note: Unifying these 3 only makes sense if the `expected` is fully inferred already.
             | TyExists(a,b), TyExists(a',b') when 
-                    List.length a = List.length a' 
+                    List.length a = List.length a'
                     && List.forall2 (fun (a : Var) (a' : Var) -> a.kind = a'.kind && a.constraints = a'.constraints) a a' -> 
-                loop (b, subst (List.map2 (fun a a' -> a', TyVar a) a a') b')
+                loop (b, subst (List.map2 (fun a a' -> a', tyvar a) a a') b')
             | TyForall(a,b), TyForall(a',b') 
-            | TyInl(a,b), TyInl(a',b') when a.kind = a'.kind && a.constraints = a'.constraints -> loop (b, subst [a',TyVar a] b')
+            | TyInl(a,b), TyInl(a',b') when a.kind = a'.kind && a.constraints = a'.constraints -> loop (b, subst [a',tyvar a] b')
             | TyMacro a, TyMacro b ->
                 List.iter2 (fun a b ->
                     match a,b with
@@ -991,6 +1117,8 @@ let infer package_id module_id (top_env' : TopEnv) expr =
         try loop (got, expected)
         with :? TypeErrorException as e -> errors.AddRange e.Data0
 
+    let unify range got expected = unify_gadt None range got expected
+
     let apply_record r s l x =
         match visit_t x with
         | TySymbol x ->
@@ -1000,8 +1128,8 @@ let infer package_id module_id (top_env' : TopEnv) expr =
             match l |> Map.tryPick (fun (_, k) v -> if k = x then Some v else None) with
             | Some x ->
                 let com = match x with TyComment(com,_) -> com | _ -> ""
-                hover_types.Add(r,(x,com))
                 unify r s x
+                hover_types.AddHover (r,(x,com))
             | None -> errors.Add(r,RecordIndexFailed x)
         | x -> errors.Add(r,ExpectedSymbolAsRecordKey x)
 
@@ -1035,7 +1163,7 @@ let infer package_id module_id (top_env' : TopEnv) expr =
     let typevars scope env (l : TypeVar list) =
         List.mapFold (fun s x ->
             let v = typevar_to_var scope env.constraints x
-            v, Map.add v.name (TyVar v) s
+            v, Map.add v.name (tyvar v) s
             ) env.ty l
 
     let rec term scope env s x = term' scope false env s x
@@ -1048,18 +1176,23 @@ let infer package_id module_id (top_env' : TopEnv) expr =
             | None -> errors.Add(r,UnboundVariable name)
             | Some (_,TySymbol "<real>") -> errors.Add(r,RealFunctionInTopDown)
             | Some (com,TyModule _ & m) when is_in_left_apply = false ->
-                hover_types.Add(r,(m,com))
+                hover_types.AddHover(r,(m,com))
                 errors.Add(r,ModuleMustBeImmediatelyApplied)
             | Some (com,a) ->
                 match a with TyForall _ -> annotations.Add(x,(r,s)) | _ -> ()
-                hover_types.Add(r,(s,com))
                 let f a = let l,v = forall_subst_all scope a in unify r s v; l
                 let l = f a
+                hover_types.AddHover(r,(s,com))
                 type_apply_args.Add(name,(l,f))
+        let match_clause (q,w) (a,b) =
+            let gadt_links, gadt_typecases', (scope, env) = pattern scope env q a
+            term scope env w b
+            dispose_gadt_links gadt_links
+            gadt_typecases.Add(b,gadt_typecases')
         match x with
         | RawB r -> unify r s TyB
         | RawV(r,a) -> rawv (r,a)
-        | RawDefaultLit(r,_) -> hover_types.Add(r,(s,"")); annotations.Add(x,(r,s)); unify r s (fresh_subst_var scope (Set.singleton CNumber) KindType)
+        | RawDefaultLit(r,_) -> unify r s (fresh_subst_var scope (Set.singleton CNumber) KindType); hover_types.AddHover(r,(s,"")); annotations.Add(x,(r,s))
         | RawLit(r,a) -> unify r s (lit a)
         | RawSymbol(r,x) -> unify r s (TySymbol x)
         | RawIfThenElse(_,cond,tr,fl) -> f (TyPrim BoolT) cond; f s tr; f s fl
@@ -1070,7 +1203,6 @@ let infer package_id module_id (top_env' : TopEnv) expr =
             f q a; f w b
         | RawSeq(_,a,b) -> f TyB a; f s b
         | RawReal(_,a) -> assert_bound_vars env a
-        | RawOp(r,BackendSwitch,_) -> errors.Add(r,BackendSwitchInTopDownSegment)
         | RawOp(_,_,l) -> List.iter (assert_bound_vars env) l
         | RawJoinPoint(r,None,a,_) -> annotations.Add(x,(r,s)); f s a
         | RawJoinPoint(r,Some _,a,_) ->
@@ -1101,22 +1233,21 @@ let infer package_id module_id (top_env' : TopEnv) expr =
                     | TySymbol n ->
                         match Map.tryFind n l with
                         | Some (TyModule _ as a) ->
-                            match b with
-                            | RawSymbol(r,_) -> hover_types.Add(r,(a,""))
-                            | _ -> ()
-                            if is_in_left_apply then unify r s a
+                            if is_in_left_apply then 
+                                match b with RawSymbol(r,_) -> hover_types.AddHover(r,(a,"")) | _ -> ()
+                                unify r s a
                             else errors.Add(r,ModuleMustBeImmediatelyApplied)
                         | Some a' ->
                             let typevars,a = forall_subst_all scope a'
                             if List.isEmpty typevars = false then
                                 annotations.Add(x,(r,s))
                                 module_type_apply_args.Add(x,typevars)
-                            match b with
-                            | RawSymbol(r,_) ->
-                                let com = match a' with TyComment(com,_) -> com | _ -> ""
-                                hover_types.Add(r,(a,com))
-                            | _ -> ()
                             unify r s a
+                            match b with 
+                            | RawSymbol(r,_) -> 
+                                let com = match a' with TyComment(com,_) -> com | _ -> ""
+                                hover_types.AddHover(r,(a,com))
+                            | _ -> ()
                         | None -> errors.Add(r,ModuleIndexFailed n)
                     | b -> errors.Add(r,ExpectedSymbolAsModuleKey b)
                 | TyFun(domain,range,_) -> unify (range_of_expr a') range s; f domain b
@@ -1124,7 +1255,7 @@ let infer package_id module_id (top_env' : TopEnv) expr =
             loop (f'' a')
         | RawAnnot(_,a,b) -> ty scope env s b; f s a
         | RawOpen(_,(r,a),l,on_succ) ->
-            match module_open hover_types (loc_env top_env) r a l with
+            match module_open (Some hover_types) (loc_env top_env) r a l with
             | Ok x ->
                 let combine big small = Map.foldBack Map.add small big
                 term scope {term = combine env.term x.term; ty = combine env.ty x.ty; constraints = combine env.constraints x.constraints} s on_succ
@@ -1137,7 +1268,7 @@ let infer package_id module_id (top_env' : TopEnv) expr =
                     | RawRecordWithoutSymbol(r,a) -> {|range=r; symbol = a|} :: l, Set.add a s
                     | RawRecordWithoutInjectVar(r,a) ->
                         match v_term env a with
-                        | Some (com, TySymbol a & x) -> hover_types.Add(r,(x,com)); {|range=r; symbol = a|} :: l, Set.add a s
+                        | Some (com, TySymbol a & x) -> hover_types.AddHover(r,(x,com)); {|range=r; symbol = a|} :: l, Set.add a s
                         | Some (_,x) -> errors.Add(r, ExpectedSymbolAsRecordKey x); state
                         | None -> errors.Add(r, UnboundVariable a); state
                     ) withouts ([],Set.empty)
@@ -1147,7 +1278,7 @@ let infer package_id module_id (top_env' : TopEnv) expr =
                     let with_symbol_modify ((r,a),b) = {|range=r; symbol = a; is_blocked=Set.contains a s; is_modify=true; var=TyFun(fresh_var scope,fresh_var scope,FT_Vanilla); body=b|} :: l, Set.add a s
                     let inline with_inject next ((r,a),b) =
                         match v_term env a with
-                        | Some (com, TySymbol a & x) -> hover_types.Add(r,(x,com)); next ((r,a),b)
+                        | Some (com, TySymbol a & x) -> hover_types.AddHover(r,(x,com)); next ((r,a),b)
                         | Some (_, x) -> errors.Add(r, ExpectedSymbolAsRecordKey x); f' b |> ignore; state
                         | None -> errors.Add(r, UnboundVariable a); f' b |> ignore; state
                     match x with
@@ -1257,31 +1388,31 @@ let infer package_id module_id (top_env' : TopEnv) expr =
                 | TyMetavar _, _ -> errors.Add(range_of_expr x, MetavarsNotAllowedInRecordWith); eval Map.empty
                 | a,_ -> errors.Add(range_of_expr x, ExpectedRecord a); eval Map.empty
             |> fun v -> if errors.Count = i then unify r (TyRecord v) s
-        | RawExists(_,l,body) ->
+        | RawExists(r,(r',l),body) ->
             match visit_t s with
             | TyExists(type_vars,type_body) ->
                 let vars, s = exists_subst_term scope (type_vars,type_body)
-                Option.iter (List.iter2 (ty scope env) vars) l
+                l |> Option.iter (fun l ->
+                    let l1,l2 = vars.Length, l.Length
+                    if l1 = l2 then List.iter2 (ty scope env) vars l
+                    else errors.Add(r', UnexpectedNumberOfArgumentsInExistsBody(l1,l2))
+                    )
                 term scope env s body
                 assert_exists_hasnt_metavars (range_of_expr x) vars
                 exists_vars.Add(x,vars)
-            | s -> errors.Add(range_of_expr x, ExpectedExistentialInTerm s); f (fresh_var scope) body
+            | s -> errors.Add(r, ExpectedExistentialInTerm s); f (fresh_var scope) body
         | RawFun(r,l) ->
             annotations.Add(x,(r,s))
             let q,w = fresh_var scope, fresh_var scope
             unify r s (TyFun(q,w,FT_Vanilla))
-            List.iter (fun (a,b) -> 
-                let scope, env = pattern scope env q a
-                term scope env w b
-                ) l
+            List.iter (match_clause (q,w)) l
         | RawForall _ -> failwith "Compiler error: Should be handled in let statements."
         | RawMatch(_,(RawForall _ | RawFun _) & body,[PatVar(r,name), on_succ]) -> term scope (inl scope env ((r, name), body)) s on_succ
         | RawRecBlock(_,l',on_succ) -> term scope (rec_block scope env l') s on_succ
         | RawMatch(_,body,l) ->
             let body_var = fresh_var scope
             f body_var body
-            let l = List.map (fun (a,on_succ) -> pattern scope env body_var a, on_succ) l
-            List.iter (fun ((scope,env),on_succ) -> term scope env s on_succ) l
+            List.iter (match_clause (body_var,s)) l
         | RawMissingBody r -> errors.Add(r,MissingBody)
         | RawMacro(r,a) ->
             annotations.Add(x,(r,s))
@@ -1330,7 +1461,7 @@ let infer package_id module_id (top_env' : TopEnv) expr =
         term scope {env with ty = env_ty} body_var body
         let t = generalize r scope vars body_var
         generalized_statements.Add(body,t)
-        hover_types.Add(r,(t,""))
+        hover_types.AddHover(r,(t,""))
         {env with term = Map.add name t env.term }
     and rec_block scope env l' =
         let scope = scope + 1
@@ -1346,9 +1477,9 @@ let infer package_id module_id (top_env' : TopEnv) expr =
                     let gen env : Env =
                         let t = generalize r scope vars body_var
                         generalized_statements.Add(body,t)
+                        hover_types.AddHover(r,(t,""))
                         {env with term = Map.add name t env.term}
                     let ty = List.foldBack (fun x s -> TyForall(x,s)) vars body_var
-                    hover_types.Add(r,(ty,""))
                     (term, gen), Map.add name ty s
                     ) env.term l'
             else
@@ -1358,7 +1489,7 @@ let infer package_id module_id (top_env' : TopEnv) expr =
                     let gen env : Env =
                         let t = generalize r scope [] body_var
                         generalized_statements.Add(body,t)
-                        hover_types.Add(r,(t,""))
+                        hover_types.AddHover(r,(t,""))
                         {env with term = Map.add name t env.term}
                     (term, gen), Map.add name body_var s
                     ) env.term l'
@@ -1384,15 +1515,16 @@ let infer package_id module_id (top_env' : TopEnv) expr =
     and ty' scope is_in_left_apply (env : Env) s x =
         let f s x = ty scope env s x
         match x with
-        | RawTWildcard r -> hover_types.Add(r,(s,""))
+        | RawTTypecase _ -> failwith "Compiler error: Type level typecase should not appear in the top down segment."
+        | RawTWildcard r -> hover_types.AddHover(r,(s,""))
         | RawTArray(r,a) ->
             let v = fresh_var scope
             unify r s (TyArray v)
             f v a
         | RawTVar(r,x) ->
             match v_ty env x with
-            | Some (TyModule _ & m) when is_in_left_apply = false -> hover_types.Add(r,(m,"")); errors.Add(r,ModuleMustBeImmediatelyApplied)
-            | Some x -> hover_types.Add(r,(x,"")); unify r s x
+            | Some (TyModule _ & m) when is_in_left_apply = false -> hover_types.AddHover(r,(m,"")); errors.Add(r,ModuleMustBeImmediatelyApplied)
+            | Some x -> unify r s x; hover_types.AddHover(r,(x,""))
             | None -> errors.Add(r, UnboundVariable x)
         | RawTB r -> unify r s TyB
         | RawTLit(r,x) -> unify r s (TyLit x)
@@ -1410,19 +1542,19 @@ let infer package_id module_id (top_env' : TopEnv) expr =
             let l' = Map.map (fun _ _ -> fresh_var scope) l
             unify r s (TyRecord l')
             Map.iter (fun k s -> f s l.[k]) l'
-        | RawTUnion(r,l,lay) ->
-            let l' = Map.map (fun _ _ -> fresh_var scope) l
+        | RawTUnion(r,l,lay,_) ->
+            let l' = Map.map (fun _ (is_gadt,_) -> is_gadt, fresh_var scope) l
             unify r s (TyUnion(l',lay))
-            Map.iter (fun k s -> f s l.[k]) l'
+            Map.iter (fun k (is_gadt,s) -> let x = snd l.[k] in if is_gadt then ty scope {env with ty = Map.empty} s x else f s x) l'
         | RawTExists(r,a,b) ->
             let a = List.map (typevar_to_var scope env.constraints) a
             let body_var = fresh_var scope
-            ty scope {env with ty = List.fold (fun s a -> Map.add a.name (TyVar a) s) env.ty a} body_var b
+            ty scope {env with ty = List.fold (fun s a -> Map.add a.name (tyvar a) s) env.ty a} body_var b
             unify r s (TyExists(a, body_var))
         | RawTForall(r,a,b) ->
             let a = typevar_to_var scope env.constraints a
             let body_var = fresh_var scope
-            ty scope {env with ty = Map.add a.name (TyVar a) env.ty} body_var b
+            ty scope {env with ty = Map.add a.name (tyvar a) env.ty} body_var b
             unify r s (TyForall(a, body_var))
         | RawTApply(r,a',b) ->
             let f' b k x = let v = fresh_var' scope k in ty' scope b env v x; visit_t v
@@ -1432,18 +1564,17 @@ let infer package_id module_id (top_env' : TopEnv) expr =
                 | TySymbol x ->
                     match Map.tryFind x l with
                     | Some (TyModule _ as a) ->
-                        match b with
-                        | RawTSymbol(r,_) -> hover_types.Add(r,(a,""))
-                        | _ -> ()
-                        if is_in_left_apply then unify r s a
+                        if is_in_left_apply then 
+                            unify r s a
+                            match b with RawTSymbol(r,_) -> hover_types.AddHover(r,(a,"")) | _ -> ()
                         else errors.Add(r,ModuleMustBeImmediatelyApplied)
-                    | Some a ->
+                    | Some a -> 
+                        unify r s a
                         match b with
                         | RawTSymbol(r,_) ->
                             let com = match a with TyComment(com,_) -> com | _ -> ""
-                            hover_types.Add(r,(a,com))
+                            hover_types.AddHover(r,(a,com))
                         | _ -> ()
-                        unify r s a
                     | None -> errors.Add(r,ModuleIndexFailed x)
                 | b -> errors.Add(r,ExpectedSymbolAsRecordKey b)
             | TyInl(a,body) -> let v = fresh_var' scope a.kind in f v b; unify r s (subst [a,v] body)
@@ -1467,8 +1598,18 @@ let infer package_id module_id (top_env' : TopEnv) expr =
             f v a
         | RawTFilledNominal _ -> failwith "Compiler error: RawTNominal should be filled in by the inferencer."
         | RawTMetaVar _ -> failwith "Compiler error: This particular metavar is only for typecase's clauses. This happens during the bottom-up segment."
-    and pattern (scope : Scope) (env : Env) s a : Scope * Env = 
-        let is_first = System.Collections.Generic.HashSet() // This is here so the variables already in the env aren't being unified with new pattern vars.
+    and pattern (scope : Scope) (env : Env) s a : T option ref ResizeArray * (T * T list * T) ResizeArray * (Scope * Env) = 
+        let gadt_links = ResizeArray()
+        let gadt_typecases = ResizeArray()
+        let term_vars = Dictionary(HashIdentity.Structural)
+        let ty_vars = Dictionary(HashIdentity.Structural)
+        let mutable scope = scope
+        let update_env () =
+            scope,
+            {env with
+                ty = (env.ty,ty_vars) ||> Seq.fold (fun s x -> Map.add x.Key x.Value s)
+                term = (env.term,term_vars) ||> Seq.fold (fun s x -> Map.add x.Key x.Value s)
+                }
         let ho_make (i : GlobalId) (l : Var list) =
             let h = TyNominal i
             let l' = List.map (fun (x : Var) -> x, fresh_subst_var scope x.constraints x.kind) l
@@ -1480,37 +1621,41 @@ let infer package_id module_id (top_env' : TopEnv) expr =
         let rec ho_fun = function
             | TyFun(_,a,_) | TyForall(_,a) -> ho_fun a
             | a -> ho_index a
-        let rec loop (scope : Scope, env : Env) s x =
-            let f = loop (scope, env)
+        let rec loop s x : unit =
+            let f = loop
             match x with
             | PatFilledDefaultValue _ -> failwith "Compiler error: PatDefaultValueFilled should not appear during inference."
-            | PatB r -> unify r s TyB; scope, env
-            | PatE r -> hover_types.Add(r,(s,"")); scope, env
+            | PatB r -> unify r s TyB
+            | PatE r -> hover_types.AddHover(r,(s,""))
             | PatVar(r,a) ->
-                hover_types.Add(r,(s,""))
-                if is_first.Add a then scope, {env with term=Map.add a s env.term}
-                else unify r s env.term.[a]; scope, env
+                match term_vars.TryGetValue(a) with
+                | true, v -> unify r s v
+                | _ -> term_vars.Add(a,s)
+                hover_types.AddHover(r,(s,""))
             | PatDyn(_,a) -> f s a
             | PatAnnot(_,a,b) -> ty scope env s b; f s a
-            | PatWhen(_,a,b) -> let scope, env = f s a in term scope env (TyPrim BoolT) b; scope, env
+            | PatWhen(_,a,b) -> 
+                f s a
+                let scope,env = update_env()
+                term scope env (TyPrim BoolT) b
             | PatPair(r,a,b) ->
                 let q,w = fresh_var scope, fresh_var scope
                 unify r s (TyPair(q,w))
-                loop (loop (scope, env) q a) w b
-            | PatSymbol(r,a) -> unify r s (TySymbol a); scope, env
-            | PatOr(_,a,b) | PatAnd(_,a,b) -> loop (loop (scope, env) s a) s b
-            | PatValue(r,a) -> unify r s (lit a); scope, env
-            | PatDefaultValue(r,_) ->
-                hover_types.Add(r,(s,""))
+                loop q a; loop w b
+            | PatSymbol(r,a) -> unify r s (TySymbol a)
+            | PatOr(_,a,b) | PatAnd(_,a,b) -> loop s a; loop s b
+            | PatValue(r,a) -> unify r s (lit a)
+            | PatDefaultValue(r,_) -> 
                 annotations.Add(x,(r,s))
-                unify r s (fresh_subst_var scope (Set.singleton CNumber) KindType); scope, env
+                unify r s (fresh_subst_var scope (Set.singleton CNumber) KindType)
+                hover_types.AddHover(r,(s,""))
             | PatRecordMembers(r,l) ->
                 let l =
                     List.choose (function
                         | PatRecordMembersSymbol((r,a),b) -> Some (a,b)
                         | PatRecordMembersInjectVar((r,a),b) ->
                             match v_term env a with
-                            | Some (com,TySymbol a & x) -> hover_types.Add(r,(x,com)); Some (a,b)
+                            | Some (com,TySymbol a & x) -> hover_types.AddHover(r,(x,com)); Some (a,b)
                             | Some (_,x) -> errors.Add(r, ExpectedSymbolAsRecordKey x); None
                             | None -> errors.Add(r, UnboundVariable a); None
                         ) l
@@ -1518,46 +1663,52 @@ let infer package_id module_id (top_env' : TopEnv) expr =
                 | TyRecord l' as s ->
                     let l, missing =
                         List.mapFoldBack (fun (a,b) missing ->
-                            // match Map.tryFind a l' with
                             match l' |> Map.tryPick (fun (i, k) v -> if k = a then Some (i, v) else None) with
-                            | Some x -> (x,b), missing
-                            | None -> ((0, fresh_var scope),b), a :: missing
+                            | Some (_,x) -> (x,b), missing
+                            | None -> (fresh_var scope,b), a :: missing
                             ) l []
                     if List.isEmpty missing = false then errors.Add(r, MissingRecordFieldsInPattern(s, missing))
-                    List.fold (fun env ((i,a),b) -> loop env a b) (scope, env) l
+                    List.iter (fun (a,b) -> loop a b) l
                 | s ->
-                    let l, (env, _i) =
-                        List.mapFold (fun (env, i) (a,b) ->
+                    let l =
+                        List.mapi (fun i (a,b) -> 
                             let v = fresh_var scope
-                            (((i, a), v), (loop env v b, i + 1))
-                            ) ((scope, env), 0) l
+                            loop v b
+                            (i, a), v
+                            ) l
                     unify r s (l |> Map |> TyRecord)
-                    env
             | PatExists(r,l,p) ->
-                // TODO: The way variable shadowing is being checked in the top down segment needs to be factored out
-                // into its own pass. For now it will simply be turned off in existentials in order to be able to use them
-                // in `|` patterns.
-                //l |> List.iter (fun (r,name) -> if Map.containsKey name env.ty then errors.Add(r,ShadowedExists))
+                l |> List.iter (fun (r,name) -> if Map.containsKey name env.ty then errors.Add(r,ShadowedExists))
                 match visit_t s with
-                | TyExists(type_vars,type_body) ->
-                    if l.Length = type_vars.Length then
-                        let scope = scope + 1
-                        let vars, s = exists_subst_pattern scope l (type_vars, type_body)
-                        let env = {env with ty = List.fold2 (fun s (_,x) v -> Map.add x v s) env.ty l vars}
-                        pattern scope env s p
+                | TyExists(type_var_list,type_body) ->
+                    if l.Length = type_var_list.Length then
+                        scope <- scope + 1
+                        let vars = (l, type_var_list) ||> List.map2 (fun (_,name) l -> 
+                            Utils.memoize ty_vars (fun name -> tyvar {l with scope=scope; name=name}) name
+                            )
+                        loop (subst (List.zip type_var_list vars) type_body) p
                     else
-                       errors.Add(r, UnexpectedNumberOfArgumentsInExistsPattern(l.Length,type_vars.Length)); scope, env 
-                | s -> errors.Add(r, ExpectedExistentialInPattern s); scope, env
+                       errors.Add(r, UnexpectedNumberOfArgumentsInExistsPattern(l.Length,type_var_list.Length))
+                | s -> errors.Add(r, ExpectedExistentialInPattern s)
             | PatUnbox(r,name,a) ->
                 let assume i =
                     let n = top_env.nominals.[i]
                     match n.body with
                     | TyUnion(cases,_) ->
-                        hover_types.Add(r,(s,""))
                         let x,m = ho_make i n.vars
                         unify r s x
                         match Map.tryPick (fun (_, name') v -> if name = name' then Some v else None) cases with
-                        | Some v -> f (subst m v) a
+                        | Some (is_gadt, v) -> 
+                            if is_gadt then 
+                                scope <- scope + 1
+                                let forall_vars,body,specialized_constructor = gadt_extract scope v
+                                gadt_typecases.Add(s, forall_vars, specialized_constructor)
+                                match a with PatE r' when r = r' -> () | _ -> loop body a // This check for PatE is so the hovers for it don't overwrite the main pattern.
+                                unify_gadt (Some gadt_links) r s specialized_constructor
+                                hover_types.AddHover(r,(s,""))
+                            else
+                                match a with PatE r' when r = r' -> () | _ -> f (subst m v) a
+                                hover_types.AddHover(r,(s,""))
                         | None -> errors.Add(r,CasePatternNotFoundForType(i,name)); f (fresh_var scope) a
                     | _ -> errors.Add(r,NominalInPatternUnbox i); f (fresh_var scope) a
                 match term_subst s |> ho_index with
@@ -1594,28 +1745,29 @@ let infer package_id module_id (top_env' : TopEnv) expr =
             | PatArray(r,a) ->
                 let v = fresh_var scope
                 unify r s (TyArray v)
-                List.fold (fun (scope,env) x -> pattern scope env v x) (scope,env) a
-        loop (scope,env) s a
+                List.iter (fun x -> loop v x) a
+        loop s a
+        gadt_links, gadt_typecases, update_env()
 
-    let nominal_term r i tt name vars v =
+    let nominal_term global_id tt name vars v =
         let constructor body =
-            let t,_ = List.fold (fun (a,k) b -> let k = trim_kind k in TyApply(a,TyVar b,k),k) (TyNominal i,tt) vars
+            let t,_ = List.fold (fun (a,k) b -> let k = trim_kind k in TyApply(a,tyvar b,k),k) (TyNominal global_id,tt) vars
             let x = match body with TyB -> t | _ -> TyFun(body,t,FT_Vanilla)
             List.foldBack (fun var ty -> TyForall(var,ty)) vars x
         match v with
-        | TyUnion(l,_) -> Map.fold (fun s (_, name) v -> Map.add name (constructor v) s) Map.empty l
+        | TyUnion(l,_) -> Map.fold (fun s (_,name) (is_gadt,v) -> Map.add name (if is_gadt then v else constructor v) s) Map.empty l
         | _ -> Map.add name (constructor v) Map.empty
 
     let psucc = Hopac.Job.thunk >> Hopac.Hopac.memo
     let pfail = Hopac.Promise.Now.withFailure (System.Exception "Compiler error: Tried to read from a FilledTop that has errors.")
 
-    let top_env_nominal s r (i : GlobalId) tt name vars v =
-        { s with
-            nominals_next_tag = max s.nominals_next_tag i.tag + 1
-            nominals_aux = Map.add i {|kind=tt; name=name|} s.nominals_aux
-            nominals = Map.add i {|vars=vars; body=v|} s.nominals
-            term = Map.foldBack Map.add (nominal_term r i tt name vars v) s.term
-            ty = Map.add name (TyNominal i) s.ty
+    let top_env_nominal top_env (global_id : GlobalId) tt name vars v =
+        { top_env with
+            nominals_next_tag = max top_env.nominals_next_tag global_id.tag + 1
+            nominals_aux = Map.add global_id {|kind=tt; name=name|} top_env.nominals_aux
+            nominals = Map.add global_id {|vars=vars; body=v|} top_env.nominals
+            term = Map.foldBack Map.add (nominal_term global_id tt name vars v) top_env.term
+            ty = Map.add name (TyNominal global_id) top_env.ty
             }
 
     let rec typevar = function
@@ -1624,53 +1776,55 @@ let infer package_id module_id (top_env' : TopEnv) expr =
     let hovars (x : HoVar list) =
         List.mapFold (fun s (_,(n,t)) ->
             let v = {scope=0; kind=typevar t; name=n; constraints=Set.empty}
-            v, Map.add n (TyVar v) s
+            v, Map.add n (tyvar v) s
             ) Map.empty x
 
     let scope = 0
-    match expr with
-    | BundleType(q,(r,name),vars',expr) ->
-        let vars,env_ty = hovars vars'
-        let v = fresh_var scope
-        ty scope {term=Map.empty; ty=env_ty; constraints=Map.empty} v expr
-        let t = List.foldBack (fun x s -> TyInl(x,s)) vars (term_subst v)
-        hover_types.Add(r,(t,""))
-        if 0 = errors.Count then psucc (fun () -> FType(q,(r,name),vars',expr)), AInclude {top_env_empty with ty = Map.add name t Map.empty}
-        else pfail, AInclude top_env_empty
-    | BundleNominal(q,(r,name),vars',expr) ->
-        let vars,env_ty = hovars vars'
-        let tt = List.foldBack (fun (x : Var) s -> KindFun(x.kind,s)) vars KindType
-        let v = fresh_var scope
-        ty scope {term=Map.empty; ty=env_ty; constraints=Map.empty} v expr
-        let v = term_subst v
-        if 0 = errors.Count then psucc (fun () -> FNominal(q,(r,name),vars',expr)), AInclude(top_env_nominal top_env_empty r (at_tag top_env'.nominals_next_tag) tt name vars v)
-        else pfail, AInclude top_env_empty
-    | BundleNominalRec l' ->
-        let _ = // Checks that mutually recursive unions do not have duplicates.
-            let h = HashSet()
-            l' |> List.iter (fun (_,_,_,x) ->
-                match x with
-                | RawTUnion(_,l,_) -> l |> Map.iter (fun k v -> if h.Add k = false then errors.Add(range_of_texpr v,DuplicateKeyInRecUnion))
-                | _ -> ()
-                )
+    let bundle_nominal_rec l' =
         let l,_ =
             List.mapFold (fun i (_,name,vars,body) ->
                 let l,env = hovars vars
                 let tt = List.foldBack (fun (x : Var) s -> KindFun(x.kind,s)) l KindType
                 (at_tag i,name,l,env,tt,body), i+1
                 ) top_env.nominals_next_tag l'
+
         top_env <-
-            let f s (i,(_,name),l,env,tt,body) = Map.add i {|name=name; kind=tt|} s
-            {top_env with nominals_aux = List.fold f top_env.nominals_aux l}
-        let env_ty = List.fold (fun s (i,(_,name),_,_,_,_) -> Map.add name (TyNominal i) s) top_env.ty l
-        let x =
-            List.fold (fun s (i,(r,name),vars,env_ty',tt,body) ->
-                let v = fresh_var scope
-                ty scope {term=Map.empty; ty=Map.foldBack Map.add env_ty' env_ty; constraints=Map.empty} v body
-                let v = term_subst v
-                top_env_nominal s r i tt name vars v
-                ) top_env_empty l
-        if 0 = errors.Count then psucc (fun () -> FNominalRec l'), AInclude x
+            {top_env with 
+                nominals_aux = (top_env.nominals_aux, l) ||> List.fold (fun s (i,(_,name),_,_,tt,_) -> Map.add i {|name=name; kind=tt|} s)
+                ty = (top_env.ty, l) ||> List.fold (fun s (i,(_,name),_,_,_,_) -> Map.add name (TyNominal i) s) 
+                }
+        
+        List.fold (fun top_env (global_id,(r,name),vars,env_ty,tt,body) ->
+            let v = fresh_var scope
+            ty scope {term=Map.empty; ty=env_ty; constraints=Map.empty} v body
+            let v = term_subst v
+            validate_nominal errors global_id body v
+            top_env_nominal top_env global_id tt name vars v
+            ) top_env_empty l
+
+    match expr with
+    | BundleType(q,(r,name),vars',expr) ->
+        let vars,env_ty = hovars vars'
+        let v = fresh_var scope
+        ty scope {term=Map.empty; ty=env_ty; constraints=Map.empty} v expr
+        let t = List.foldBack (fun x s -> TyInl(x,s)) vars (term_subst v)
+        hover_types.AddHover(r,(t,""))
+        if 0 = errors.Count then psucc (fun () -> FType(q,(r,name),vars',expr)), AInclude {top_env_empty with ty = Map.add name t Map.empty}
+        else pfail, AInclude top_env_empty
+    | BundleNominal(q,(r,name),vars',expr) ->
+        let x = bundle_nominal_rec [q,(r,name),vars',expr]
+        if 0 = errors.Count then psucc (fun () -> FNominal(q,(r,name),vars',expr)), AInclude x
+        else pfail, AInclude top_env_empty
+    | BundleNominalRec l ->
+        let _ = // Checks that mutually recursive unions do not have duplicates.
+            let h = HashSet()
+            l |> List.iter (fun (_,_,_,x) ->
+                match x with
+                | RawTUnion(_,l,_,_) -> l |> Map.iter (fun k v -> if h.Add k = false then errors.Add(range_of_texpr (snd v),DuplicateKeyInRecUnion))
+                | _ -> ()
+                )
+        let x = bundle_nominal_rec l
+        if 0 = errors.Count then psucc (fun () -> FNominalRec l), AInclude x
         else pfail, AInclude top_env_empty
     | BundlePrototype(com,r,(r',name),(w,var_init),vars',expr) ->
         let i = at_tag top_env'.prototypes_next_tag
@@ -1679,12 +1833,12 @@ let infer package_id module_id (top_env' : TopEnv) expr =
         let vars,env_ty = typevars scope {term=Map.empty; constraints=Map.empty; ty=Map.empty} vars'
         let kind = List.foldBack (fun (k : Var) s -> KindFun(k.kind,s)) vars KindType
         let v' = {scope=scope; constraints=Set.singleton cons; name=var_init; kind=kind}
-        let env_ty = Map.add var_init (TyVar v') env_ty
+        let env_ty = Map.add var_init (tyvar v') env_ty
         let vars = v' :: vars
         let v = fresh_var scope
         ty scope {term=Map.empty; ty=env_ty; constraints=Map.empty} v expr
         let body = List.foldBack (fun a b -> TyForall(a,b)) vars (term_subst v)
-        if 0 = errors.Count && (assert_foralls_used r' body; 0 = errors.Count) then
+        if 0 = errors.Count && (assert_foralls_used errors r' body; 0 = errors.Count) then
             let x =
                 { top_env_empty with
                     prototypes_next_tag = i.tag + 1
@@ -1748,7 +1902,7 @@ let infer package_id module_id (top_env' : TopEnv) expr =
             let guard next = if 0 = errors.Count then next () else fail
             let ins_kind = kind_get ins_kind'
             let prototype = top_env.prototypes.[prot_id]
-            hover_types.Add(fst prot, (prototype.signature,"")) // TODO: Add the hover for the instance signature.
+            hover_types.AddHover(fst prot, (prototype.signature,"")) // TODO: Add the hover for the instance signature.
             let prototype_init_forall_kind = prototype_init_forall_kind prototype.signature
             let prot_kind = kind_get prototype_init_forall_kind
             assert_kind_arity prot_kind.arity ins_kind.arity
@@ -1763,22 +1917,22 @@ let infer package_id module_id (top_env' : TopEnv) expr =
             let ins_vars, env_ty =
                 List.mapFold (fun s (((r,_),_) & x,k) ->
                     let v = {typevar_to_var scope Map.empty x with kind = k}
-                    let x = TyVar v
-                    hover_types.Add(r,(x,""))
+                    let x = tyvar v
+                    hover_types.AddHover(r,(x,""))
                     x, Map.add v.name x s
                     ) Map.empty (List.zip vars (List.take vars_expected ins_kind.args))
-            let ins_constraints = ins_vars |> List.map (function TyVar x -> x.constraints | _ -> failwith "impossible")
+            let ins_constraints = ins_vars |> List.map (visit_t >> function TyVar (x,_) -> x.constraints | _ -> failwith "impossible")
             let ins_core, _ = List.fold (fun (a,k) (b : T) -> let k = trim_kind k in TyApply(a,b,k),k) (TyNominal ins_id,ins_kind') ins_vars
             let env_ty, prot_body =
                 match foralls_ty_get prototype.signature with
                 | (prot_core :: prot_foralls), prot_body ->
                     List.fold (fun ty x ->
                         assert_instance_forall_does_not_shadow_prototype_forall x.name
-                        Map.add x.name (TyVar x) ty) env_ty prot_foralls,
+                        Map.add x.name (tyvar x) ty) env_ty prot_foralls,
                     let prot_body = subst [prot_core, ins_core] prot_body
                     let _ =
                         List.foldBack (fun x s -> TyForall(x,s)) prot_foralls prot_body
-                        |> List.foldBack (fun x s -> match x with TyVar x -> TyForall(x,s) | _ -> failwith "impossible") ins_vars
+                        |> List.foldBack (fun x s -> match visit_t x with TyVar(x,_) -> TyForall(x,s) | _ -> failwith "impossible") ins_vars
                         |> fun x -> generalized_statements.Add(body,x)
                     prot_body
                 | _ -> failwith "impossible"
@@ -1802,7 +1956,7 @@ let infer package_id module_id (top_env' : TopEnv) expr =
         | Some(C x) -> errors.Add(fst prot, ExpectedPrototypeConstraint x); check_ins fake
         | Some(M _) -> errors.Add(fst prot, ExpectedPrototypeInsteadOfModule); check_ins fake
     | BundleOpen(q,(r,a),b) ->
-        match module_open hover_types (loc_env top_env) r a b with
+        match module_open (Some hover_types) (loc_env top_env) r a b with
         | Ok x -> psucc (fun () -> FOpen(q,(r,a),b)), AOpen {top_env_empty with term=x.term; ty=x.ty; constraints=x.constraints}
         | Error er -> errors.Add(er); pfail, AOpen top_env_empty
     |> fun (filled_top, top_env_additions) ->
@@ -1834,11 +1988,11 @@ let base_types (default_env : Startup.DefaultEnv) =
     "string", TyPrim StringT
     "bool", TyPrim BoolT
     "char", TyPrim CharT
-    "array_base", inl (fun x -> TyArray(TyVar x))
-    "heap", inl (fun x -> TyLayout(TyVar x,Layout.Heap))
-    "mut", inl (fun x -> TyLayout(TyVar x,Layout.HeapMutable))
-    "fptr", inl2 (fun x y -> TyFun(TyVar x,TyVar y,FT_Pointer))
-    "closure", inl2 (fun x y -> TyFun(TyVar x,TyVar y,FT_Closure))
+    "array_base", inl (fun x -> TyArray(tyvar x))
+    "heap", inl (fun x -> TyLayout(tyvar x,Layout.Heap))
+    "mut", inl (fun x -> TyLayout(tyvar x,Layout.HeapMutable))
+    "fptr", inl2 (fun x y -> TyFun(tyvar x,tyvar y,FT_Pointer))
+    "closure", inl2 (fun x y -> TyFun(tyvar x,tyvar y,FT_Closure))
     "int", TyPrim default_env.default_int
     "uint", TyPrim default_env.default_uint
     "float", TyPrim default_env.default_float

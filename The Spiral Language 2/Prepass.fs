@@ -80,8 +80,9 @@ and [<ReferenceEquality>] E =
     | ELitTest of Range * Tokenize.Literal * bind: Id * on_succ: E * on_fail: E
     | EDefaultLitTest of Range * string * T * bind: Id * on_succ: E * on_fail: E
     | ETypecase of Range * T * (T * E) list
-
 and [<ReferenceEquality>] T =
+    | TForall' of Range * Scope * Id * T
+    | TForall of Range * Id * T
     | TArrow' of Scope * Id * T
     | TArrow of Id * T
     | TExists
@@ -95,7 +96,7 @@ and [<ReferenceEquality>] T =
     | TFun of T * T * BlockParsing.FunType
     | TRecord of Range * Map<int * string,T>
     | TModule of Map<string,T>
-    | TUnion of Range * (Map<int * string,T> * BlockParsing.UnionLayout)
+    | TUnion of Range * (Map<int * string,T * T option> * BlockParsing.UnionLayout)
     | TSymbol of Range * string
     | TApply of Range * T * T
     | TPrim of Startup.PrimitiveType
@@ -105,6 +106,7 @@ and [<ReferenceEquality>] T =
     | TArray of T
     | TLayout of T * BlockParsing.Layout
     | TMetaV of Id
+    | TTypecase of Range * T * (T * T) list
 
 module Printable =
     type PMacro =
@@ -179,6 +181,9 @@ module Printable =
         | ETypecase of PT * (PT * PE) list
         | EOmmitedRecursive
     and [<ReferenceEquality>] PT =
+        | TTypecase of PT * (PT * PT) list
+        | TForall' of Scope * Id * PT
+        | TForall of Id * PT
         | TArrow' of Scope * Id * PT
         | TArrow of Id * PT
         | TExists
@@ -292,7 +297,10 @@ module Printable =
             | E.ELitTest(_,a,b,c,d) -> ELitTest(a,b,term c,term d)
             | E.EDefaultLitTest(_,a,b,c,d,e) -> EDefaultLitTest(a,ty b,c,term d,term e)
         and ty = function
+            | T.TTypecase(_,a,b) -> TTypecase(ty a,List.map (fun (a,b) -> ty a, ty b) b)
             | T.TPatternRef a -> ty !a
+            | T.TForall'(_,a,b,c) -> TForall'(a,b,ty c)
+            | T.TForall(_,a,b) -> TForall(a,ty b)
             | T.TArrow'(a,b,c) -> TArrow'(a,b,ty c)
             | T.TArrow(a,b) -> TArrow(a,ty b)
             | T.TExists -> TExists
@@ -306,7 +314,7 @@ module Printable =
             | T.TFun(a,b,t) -> TFun(ty a,ty b,t)
             | T.TRecord(_,a) -> TRecord(Map.map (fun _ -> ty) a)
             | T.TModule a -> TModule(Map.map (fun _ -> ty) a)
-            | T.TUnion(_,(a,b)) -> TUnion(Map.map (fun _ -> ty) a,b)
+            | T.TUnion(_,(a,b)) -> TUnion(Map.map (fun _ x -> ty (fst x)) a,b)
             | T.TSymbol(_,a) -> TSymbol a
             | T.TApply(_,a,b) -> TApply(ty a, ty b)
             | T.TPrim a -> TPrim a
@@ -452,17 +460,26 @@ let propagate x =
                 s + a + b
                 ) (ty a) b
     and ty = function
-        | TExists | TJoinPoint' _ | TArrow' _ | TSymbol _ | TPrim _ | TNominal _ | TLit _ | TB _ -> empty
+        | TExists | TJoinPoint' _ | TForall' _ | TArrow' _ | TSymbol _ | TPrim _ | TNominal _ | TLit _ | TB _ -> empty
+        | TTypecase(_,a,b) -> 
+            List.fold (fun s (a,b) -> 
+                let a = ty a
+                let mutable b = ty b
+                match a.ty.range with
+                | Some(a,a') -> for i=a to a' do b <- b -. i
+                | None -> ()
+                s + a + b
+                ) (ty a) b
         | TPatternRef a -> ty !a
         | TV i -> singleton_ty i
         | TMetaV i -> {empty with ty = {|empty.ty with range = Some(i,i)|} }
         | TApply(_,a,b) | TPair(_,a,b) | TFun(a,b,_) -> ty a + ty b
-        | TUnion(_,(a,_)) -> Map.fold (fun s k v -> s + ty v) empty a
-        | TModule a -> Map.fold (fun s k v -> s + ty v) empty a
+        | TUnion(_,(a,_)) -> a |> Map.fold (fun s k (a,b) -> s + ty a + (Option.map ty b |> Option.defaultValue empty)) empty
         | TRecord(_,a) -> Map.fold (fun s k v -> s + ty v) empty a
+        | TModule a -> Map.fold (fun s k v -> s + ty v) empty a
         | TTerm(_,a) -> term a
         | TMacro(_,a) -> a |> List.fold (fun s -> function TMText _ -> s | TMLitType x | TMType x -> s + ty x) empty
-        | TArrow(i,a) as x -> scope x (ty a -. i)
+        | TForall(_,i,a) | TArrow(i,a) as x -> scope x (ty a -. i)
         | TJoinPoint(_,a) as x -> scope x (ty a)
         | TArray(a) | TLayout(a,_) -> ty a
     
@@ -552,13 +569,15 @@ let resolve (scope : Dictionary<obj,PropagatedVars>) x =
     and ty (env : ResolveEnv) x = 
         let f = ty env
         match x with
-        | TExists | TJoinPoint' _ | TArrow' _ | TNominal _ | TPrim _ | TSymbol _ | TV _ | TMetaV _ | TLit _ | TB _ -> ()
+        | TExists | TJoinPoint' _ | TForall' _ | TArrow' _ | TNominal _ | TPrim _ | TSymbol _ | TV _ | TMetaV _ | TLit _ | TB _ -> ()
+        | TTypecase(_,a,b) -> ty env a; b |> List.iter (fun (a,b) -> ty env a; ty env b)
         | TPatternRef a -> f !a
+        | TForall(_,_,a)
         | TArrow(_,a) -> subst env x; f a
         | TApply(_,a,b) | TFun(a,b,_) | TPair(_,a,b) -> f a; f b
-        | TModule a -> Map.iter (fun _ -> f) a
+        | TUnion(_,(a,_)) -> a |> Map.iter (fun _ (a,b) -> f a; Option.iter f b)
         | TRecord(_,a) -> Map.iter (fun _ -> f) a
-        | TUnion(_,(a,_)) -> Map.iter (fun _ -> f) a
+        | TModule a -> Map.iter (fun _ -> f) a
         | TTerm(_,a) -> term env a
         | TMacro(_,a) -> a |> List.iter (function TMText _ -> () | TMLitType a | TMType a -> f a)
         | TJoinPoint(_,a) | TLayout(a,_) | TArray(a) -> f a
@@ -756,11 +775,28 @@ let lower (scope : Dictionary<obj,PropagatedVars>) x =
         let f = ty' case_tmetav env_rec env
         match x with
         | TMetaV i -> case_tmetav i
-        | TExists | TJoinPoint' _ | TArrow' _ | TNominal  _ | TPrim _ | TSymbol _ | TLit _ | TB _ as x -> x
+        | TExists | TJoinPoint' _ | TForall' _ | TArrow' _ | TNominal  _ | TPrim _ | TSymbol _ | TLit _ | TB _ as x -> x
+        | TTypecase(r,a,b) -> 
+            let b = b |> List.map (fun (a,b) -> 
+                let metavars = Dictionary()
+                let mutable env_case = env
+                let a = 
+                    ty' (Utils.memoize metavars (fun i ->
+                        let i, env = adj_ty env_case i
+                        env_case <- env
+                        TMetaV i
+                        )) env_rec env_case a
+                a, ty env_rec env_case b
+                )
+            TTypecase(r,ty env_rec env a,b)
         | TPatternRef a -> f !a
         | TJoinPoint(r,a) as x ->
             let scope, env = scope env x
             TJoinPoint'(r,scope,ty env_rec env a)
+        | TForall(r,a,b) as x ->  
+            let scope, env = scope env x
+            let a, env = adj_ty env a
+            TForall'(r,scope,a,ty env_rec env b)
         | TArrow(a,b) as x ->  
             let scope, env = scope env x
             let a, env = adj_ty env a
@@ -770,7 +806,7 @@ let lower (scope : Dictionary<obj,PropagatedVars>) x =
         | TFun(a,b,t) -> TFun(f a,f b,t)
         | TRecord(r,a) -> TRecord(r,Map.map (fun _ -> f) a)
         | TModule a -> TModule(Map.map (fun _ -> f) a)
-        | TUnion(r,(a,b)) -> TUnion(r,(Map.map (fun _ -> f) a,b))
+        | TUnion(r,(a,b)) -> TUnion(r,(Map.map (fun _ (a,b) -> f a, Option.map f b) a,b))
         | TApply(r,a,b) -> TApply(r,f a,f b)
         | TTerm(r,a) -> TTerm(r,term env_rec env a)
         | TMacro(r,a) ->
@@ -836,7 +872,7 @@ let prepass package_id module_id path (top_env : PrepassTopEnv) =
     let p r = {path=path; range=r}
     let at_tag i = { package_id = package_id; module_id = module_id; tag = i }
     let v_term (env : Env) x = Map.tryFind x env.term.env |> Option.defaultWith (fun () -> top_env.term.[x])
-    let v_ty (env : Env) x =  Map.tryFind x env.ty.env |> Option.defaultWith (fun () -> top_env.ty.[x])
+    let v_ty (env : Env) x = Map.tryFind x env.ty.env |> Option.defaultWith (fun () -> top_env.ty.[x])
     
     // The functions in this block are basically renaming string id to int ids, in addition to pattern compilation.
     let rec compile_pattern (id : Id) (env : Env) (clauses : (Pattern * RawExpr) list) =
@@ -958,7 +994,9 @@ let prepass package_id module_id path (top_env : PrepassTopEnv) =
         match x with
         | RawTMetaVar(_,name) -> case_metavar (Some name)
         | RawTWildcard _ -> case_metavar None
-        | RawTForall _ -> failwith "Compiler error: Foralls are not allowed at the type level."
+        | RawTForall(r,a,b) ->
+            let id, env = add_ty_var env (typevar_name a)
+            TForall(p r,id,ty' case_metavar env b)
         | RawTB r -> TB (p r)
         | RawTLit (r, x) -> TLit(p r,x)
         | RawTVar(r,a) -> v_ty env a
@@ -966,7 +1004,48 @@ let prepass package_id module_id path (top_env : PrepassTopEnv) =
         | RawTFun(r,a,b,t) -> TFun(f a,f b,t)
         | RawTExists(r,l,b) -> TExists
         | RawTRecord(r,l) -> TRecord(p r,Map.map (fun _ -> f) l)
-        | RawTUnion(r,a,b) -> TUnion(p r,(Map.map (fun _ -> f) a,b))
+        | RawTUnion(r,a,b,this) -> 
+            let rec subst_vars_with_metavars vars a =
+                let f = subst_vars_with_metavars vars
+                match a with
+                | RawTTypecase _ | RawTUnion _ -> failwith "Compiler error: Not expecting typecase or union here."
+                | RawTVar(r,n) -> if List.contains n vars then RawTMetaVar(r,n) else a
+                | RawTPrim _ | RawTFilledNominal _ | RawTTerm _ | RawTSymbol _ | RawTLit _ | RawTMetaVar _ | RawTB _ | RawTWildcard _ -> a
+                | RawTPair(r,a,b) -> RawTPair(r,f a,f b)
+                | RawTFun(r,a,b,c) -> RawTFun(r,f a,f b,c)
+                | RawTArray(r,a) -> RawTArray(r,f a)
+                | RawTRecord(r,a) -> RawTRecord(r,Map.map (fun _ -> f) a)
+                | RawTApply(r,a,b) -> RawTApply(r,f a,f b)
+                | RawTForall(r,a,b) -> RawTForall(r,a,subst_vars_with_metavars (List.removeAt (List.findIndex ((=) (typevar_name a)) vars) vars) b)
+                | RawTExists(r,a,b) -> 
+                    let f vars a = List.removeAt (List.findIndex ((=) (typevar_name a)) vars) vars
+                    RawTExists(r,a,subst_vars_with_metavars (List.fold f vars a) b)
+                | RawTMacro(r,a) -> 
+                    let f = function (RawMacroText _ | RawMacroTerm _ | RawMacroTypeLit _) as a -> a | RawMacroType(r,a) -> RawMacroType(r,f a)
+                    RawTMacro(r, List.map f a)
+                | RawTLayout(r,a,b) -> RawTLayout(r,f a,b)
+
+            let make_typecase x =
+                let rec loop vars x =
+                    match x with
+                    | RawTForall(_,a,b) -> loop (typevar_name a :: vars) b
+                    | RawTFun(r,a,b,_) -> RawTTypecase(r,this,[subst_vars_with_metavars vars b,a])
+                    | b -> let r = range_of_texpr b in RawTTypecase(r,this,[subst_vars_with_metavars vars b,RawTB r])
+                loop [] x |> f
+            TUnion(p r,(Map.map (fun _ (is_gadt,x) -> f x, if is_gadt then Some (make_typecase x) else None) a,b))
+        | RawTTypecase(r,a,b) ->
+            let b = b |> List.map (fun (t,e) ->
+                let metavars = Dictionary()
+                let mutable env_case = env
+                let t = 
+                    let f (id,env) = env_case <- env; TMetaV id
+                    ty' (function
+                        | None -> add_ty_wildcard env_case |> f
+                        | Some name -> Utils.memoize metavars (add_ty_var env_case >> f) name
+                        ) env t
+                t, ty env_case e
+                )
+            TTypecase(p r,ty env a,b)
         | RawTSymbol(r,a) -> TSymbol(p r,a)
         | RawTApply(r,a,b) ->
             match f a, f b with
@@ -982,7 +1061,7 @@ let prepass package_id module_id path (top_env : PrepassTopEnv) =
         | RawTPrim(r,a) -> TPrim(a)
         | RawTTerm(r,a) -> TTerm(p r,term env a)
         | RawTMacro(r,l) -> 
-            let f = function 
+            let f = function
                 | RawMacroText(r,a) -> TMText a
                 | RawMacroType(r,a) -> TMType(f a)
                 | RawMacroTypeLit(r,a) -> TMLitType(f a)
@@ -1060,8 +1139,8 @@ let prepass package_id module_id path (top_env : PrepassTopEnv) =
         | RawSeq(r,a,b) -> ESeq(p r,f a,f b)
         | RawHeapMutableSet(r,a,b,c) -> EHeapMutableSet(p r,f a,List.map (fun a -> p (range_of_expr a), f a) b,f c)
         | RawReal(r,a) -> f a
-        | RawExists(r,Some a,b) -> EExists(p r, List.map (ty env) a, f b)
-        | RawExists(_,None,_) -> failwith "Compiler error: The exists' vars should have been added during `fill`."
+        | RawExists(r,(_,Some a),b) -> EExists(p r, List.map (ty env) a, f b)
+        | RawExists(_,(_,None),_) -> failwith "Compiler error: The exists' vars should have been added during `fill`."
         | RawMacro _ -> failwith "Compiler error: The macro's annotation should have been added during `fill`."
         | RawAnnot(_,RawMacro(r,a),b) ->
             let a = a |> List.map (function
@@ -1085,51 +1164,66 @@ let prepass package_id module_id path (top_env : PrepassTopEnv) =
         TArrow(id,on_succ env)
     let eval_type' env l body = List.foldBack eval_type l body env |> process_ty
 
-    let nominal_term term nom r name l body bodyt =
-        let t,i = l |> List.fold (fun (nom,i) _ -> TApply(r,nom,TV i), i+1) (nom,0)
-        let rec wrap_foralls i x = if 0 < i then let i = i-1 in wrap_foralls i (EForall(r,i,x)) else process_term x
-        match body with
-        | RawTUnion(_,l,_) -> 
-            Map.fold (fun term (_, name) body ->
-                let body =
-                    match body with
-                    | RawTB _ -> ENominal(r,EPair(r, ESymbol(r,name), EB r),t)
-                    | _ -> EFun(r,0,ENominal(r,EPair(r, ESymbol(r,name), EV 0),t),Some(TFun(bodyt,t,FT_Vanilla)))
-                Map.add name (wrap_foralls i body) term
-                ) term l
-        | _ ->
-            let body =
-                match body with
-                | RawTB _ -> ENominal(r,EB r,t)
-                | _ -> EFun(r,0,ENominal(r,EV 0,t),Some(TFun(bodyt,t,FT_Vanilla)))
-            Map.add name (wrap_foralls i body) term
-
     {|
     base_type = process_ty
     filled_top = fun x ->
-        match x with
-        | FType(_,(_,name),l,body) -> AInclude {top_env_empty with ty = Map.add name (eval_type' env l (fun env -> ty env body)) Map.empty}
-        | FNominal(r,(_,name),l,body) ->
-            let i = at_tag top_env.nominals_next_tag
-            let nom = TNominal i
-            let bodyt = eval_type' env l (fun env -> TJoinPoint(p (range_of_texpr body), ty env body))
-            let term = nominal_term Map.empty nom (p r) name l body bodyt
-            let ty = Map.add name nom Map.empty
-            let nominals = Map.add i {|body=bodyt; name=name|} Map.empty
-            AInclude {top_env_empty with term = term; ty = ty; nominals = nominals; nominals_next_tag=i.tag+1}
-        | FNominalRec l ->
+        let nominal_rec l =
             let env,_ = 
                 List.fold (fun (env,i) (r,(_,name),l,body) -> 
                     add_ty env name (TNominal (at_tag i)), i+1
                     ) (env, top_env.nominals_next_tag) l
-            let term,ty,nominals,i =
-                List.fold (fun (term,ty', nominals, i) (r,(_,name),l,body) -> 
-                    let at_tag_i = at_tag i
-                    let nom = TNominal at_tag_i
-                    let bodyt = eval_type' env l (fun env -> TJoinPoint(p (range_of_texpr body), ty env body))
-                    let term = nominal_term term nom (p r) name l body bodyt
-                    term,Map.add name nom ty', Map.add at_tag_i {|body=bodyt; name=name|} nominals, i+1
-                    ) (Map.empty, Map.empty, Map.empty, top_env.nominals_next_tag) l
+            List.fold (fun (term,ty',nominals,i) (r, (_,name),l,body) -> 
+                let r = p r
+                let at_tag_i = at_tag i
+                let nom = TNominal at_tag_i
+                let bodyt = eval_type' env l (fun env -> TJoinPoint(p (range_of_texpr body), ty env body))
+                let term =
+                    match body with
+                    | RawTUnion(_,l,_,_) -> 
+                        Map.fold (fun term (_,name) (is_gadt,_) ->
+                            if is_gadt then
+                                let rec loop_outer = function
+                                    | TArrow'(_,_,t) -> loop_outer t // GADTs have the foralls in their cases' type, not here.
+                                    | TJoinPoint'(r,_,TUnion(_,(l,_))) -> 
+                                        let rec loop vars = function
+                                            | TForall'(r,scope,id,t) -> EForall(r,id,loop (id :: vars) t)
+                                            | TFun(t,t',_) -> EFun(r,0,ENominal(r,EPair(r,ESymbol(r,name),EV 0),t'),Some(TFun(t,t',FT_Vanilla)))
+                                            | t' -> ENominal(r,EPair(r,ESymbol(r,name),EB r),t')
+                                        let t = l |> Map.pick (fun (_, k) v -> if k = name then Some v else None) |> fst
+                                        loop [] t
+                                    | _ -> failwith "Compiler error: Expected a join point with a gadt union."
+                                Map.add name (loop_outer bodyt |> process_term) term
+                            else
+                                let rec loop vars = function
+                                    | TArrow'(scope,id,t) -> EForall(r,id,loop (id :: vars) t)
+                                    | TJoinPoint'(r,_,TUnion(_,(l,_))) -> 
+                                        let t = l |> Map.pick (fun (_, k) v -> if k = name then Some v else None) |> fst
+                                        let t' = List.foldBack (fun id nom -> TApply(r,nom,TV id)) vars nom
+                                        match t with
+                                        | TB _ -> ENominal(r,EPair(r,ESymbol(r,name),EB r),t')
+                                        | _ -> EFun(r,0,ENominal(r,EPair(r,ESymbol(r,name),EV 0),t'),Some(TFun(t,t',FT_Vanilla)))
+                                    | _ -> failwith "Compiler error: Expected a join point with an union."
+                                Map.add name (loop [] bodyt |> process_term) term
+                            ) term l
+                    | _ ->
+                        let rec loop vars = function
+                            | TArrow'(scope,id,t) -> EForall(r,id,loop (id :: vars) t)
+                            | TJoinPoint'(r,_,t) -> 
+                                let t' = List.foldBack (fun id nom -> TApply(r,nom,TV id)) vars nom
+                                match t with
+                                | TB _ -> ENominal(r,EB r,t')
+                                | _ -> EFun(r,0,ENominal(r,EV 0,t'),Some(TFun(t,t',FT_Vanilla)))                                
+                            | _ -> failwith "Compiler error: Expected a join point."
+                        Map.add name (loop [] bodyt |> process_term) term
+                term,Map.add name nom ty', Map.add at_tag_i {|body=bodyt; name=name|} nominals, i+1
+                ) (Map.empty, Map.empty, Map.empty, top_env.nominals_next_tag) l
+        match x with
+        | FType(_,(_,name),l,body) -> AInclude {top_env_empty with ty = Map.add name (eval_type' env l (fun env -> ty env body)) Map.empty}
+        | FNominal(r,a,b,c) ->
+            let term,ty,nominals,i = nominal_rec [r,a,b,c]
+            AInclude {top_env_empty with term = term; ty = ty; nominals = nominals; nominals_next_tag=i}
+        | FNominalRec l ->
+            let term,ty,nominals,i = nominal_rec l
             AInclude {top_env_empty with term = term; ty = ty; nominals = nominals; nominals_next_tag=i}
         | FInl(_,(_,name),body) -> AInclude {top_env_empty with term = Map.add name (term env body |> process_term) Map.empty}
         | FRecInl l ->
@@ -1160,7 +1254,8 @@ let top_env_default default_env =
     let convert_infer_to_prepass x = 
         let m = Dictionary(HashIdentity.Reference)
         let rec f = function
-            | TyVar x -> TV m.[x.name] 
+            | TyVar (_,{contents=Some x}) -> f x
+            | TyVar (x,_) -> TV m.[x.name] 
             | TyPrim x -> TPrim x
             | TyArray x -> TArray (f x)
             | TyLayout(a,b) -> TLayout(f a,b)

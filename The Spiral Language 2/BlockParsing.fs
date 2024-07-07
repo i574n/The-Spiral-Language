@@ -309,7 +309,7 @@ and RawExpr =
     | RawMatch of VSCRange * body: RawExpr * (Pattern * RawExpr) list
     | RawFun of VSCRange * (Pattern * RawExpr) list
     | RawForall of VSCRange * TypeVar * RawExpr
-    | RawExists of VSCRange * RawTExpr list option * RawExpr
+    | RawExists of VSCRange * (VSCRange * RawTExpr list option) * RawExpr
     | RawRecBlock of VSCRange * ((VSCRange * VarString) * RawExpr) list * on_succ: RawExpr // The bodies of a block must be RawFun or RawForall.
     | RawRecordWith of VSCRange * RawExpr list * RawRecordWith list * RawRecordWithout list
     | RawOp of VSCRange * Op * RawExpr list
@@ -345,14 +345,16 @@ and RawTExpr =
     | RawTPrim of VSCRange * PrimitiveType
     | RawTTerm of VSCRange * RawExpr
     | RawTMacro of VSCRange * RawMacro list
-    | RawTUnion of VSCRange * Map<int * string,RawTExpr> * UnionLayout
+    | RawTUnion of VSCRange * Map<int * string,bool * RawTExpr> * UnionLayout * this: RawTExpr  // The boolean arg determines whether the union case is generalized. `this` is the self type.
     | RawTLayout of VSCRange * RawTExpr * Layout
+    | RawTTypecase of VSCRange * RawTExpr * (RawTExpr * RawTExpr) list
     | RawTFilledNominal of VSCRange * GlobalId // Filled in by the inferencer.
 
 let (+.) (a,_) (_,b) = a,b
 let range_of_hovar ((r,_) : HoVar) = r
 let range_of_typevar ((x,_) : TypeVar) = range_of_hovar x
-let typevar_name (((_,(name,_)),_) : TypeVar) = name
+let hovar_name ((_,(name,_)) : HoVar) = name
+let typevar_name ((h,_) : TypeVar) = hovar_name h
 let range_of_record_with = function
     | RawRecordWithSymbol((r,_),_)
     | RawRecordWithSymbolModify((r,_),_)
@@ -422,7 +424,7 @@ let range_of_texpr = function
     | RawTVar(r,_)
     | RawTArray(r,_)
     | RawTRecord(r,_)
-    | RawTUnion(r,_,_)
+    | RawTUnion(r,_,_,_)
     | RawTSymbol(r,_)
     | RawTPrim(r,_)
     | RawTTerm(r,_)
@@ -432,7 +434,16 @@ let range_of_texpr = function
     | RawTApply(r,_,_)
     | RawTLayout(r,_,_)
     | RawTExists(r,_,_)
+    | RawTTypecase(r,_,_)
     | RawTForall(r,_,_) -> r
+
+let rec range_of_texpr_gadt_constructor = function
+    | RawTForall(_,_,x) -> range_of_texpr_gadt_constructor x
+    | RawTFun(_,_,x,_) | x -> range_of_texpr x
+
+let rec range_of_texpr_gadt_body = function
+    | RawTForall(_,_,x) -> range_of_texpr_gadt_body x
+    | RawTFun(_,x,_,_) | x -> range_of_texpr x
 
 type VectorCord = {|row : int; col : int|}
 type Env = {
@@ -691,12 +702,13 @@ let patterns_validate pats =
                 ) Set.empty x
         | PatExists(r,l,p) ->
             if is_type then
-                List.fold (fun s (r,x) ->
-                    pos.Add(x,r)
-                    Set.add x s
-                    ) Set.empty l
+                let s = List.fold (fun s (r,x) -> pos.Add(x,r); Set.add x s) Set.empty l
+                let x = loop p
+                let inters = Set.intersect s x
+                if Set.isEmpty inters = false then inters |> Set.iter (fun x -> errors.Add(pos.[x], duplicate_var()))
+                s + x
             else 
-                Set.empty
+                loop p
         | PatVar(r,x) -> 
             if is_type then
                 Set.empty
@@ -956,7 +968,7 @@ let typecase_validate x _ =
     let vars = Collections.Generic.HashSet()
     let errors = ResizeArray()
     let rec f = function
-        | RawTFilledNominal _ | RawTTerm _ -> failwith "Compiler error: This case is not supposed to appear in typecase."
+        | RawTFilledNominal _ | RawTTerm _ | RawTTypecase _ -> failwith "Compiler error: This case is not supposed to appear in typecase."
         | RawTForall(r,_,_) -> errors.Add(r,ForallNotAllowedInTypecase)
         | RawTExists(r,_,_) -> errors.Add(r,ExistsNotAllowedInTypecase)
         | RawTLit _ | RawTPrim _ | RawTSymbol _ | RawTB _ | RawTWildcard _ -> ()
@@ -964,7 +976,7 @@ let typecase_validate x _ =
         | RawTVar(r,a) -> if metavars.Contains(a) then errors.Add(r,VarShadowedByMetavar) else vars.Add(a) |> ignore
         | RawTApply(_,a,b) | RawTFun(_,a,b,_) | RawTPair(_,a,b) -> f a; f b
         | RawTLayout(_,a,_) | RawTArray(_,a) -> f a
-        | RawTUnion(_,a,_) -> Map.iter (fun _ -> f) a
+        | RawTUnion(_,a,_,_) -> Map.iter (fun _ x -> f (snd x)) a 
         | RawTRecord(_,a) -> Map.iter (fun _ -> f) a
         | RawTMacro(_,a) -> a |> List.iter (function RawMacroType(_,a) -> f a | _ -> ())
     f x
@@ -1066,11 +1078,18 @@ and root_type_record (flags : RootTypeFlags) d =
         ) d
 and root_type_union (flags : RootTypeFlags) d =
     let bar = bar (col d)
-    (range (optional bar >>. sepBy1 (range read_big_var_as_symbol .>>. opt (skip_op ":" >>. root_type flags)) bar)
+    let vanilla = skip_op ":" >>. root_type flags |>> fun x -> Some (false, x)
+    let gadt = 
+        skip_op "::"
+        >>. pipe2 (opt forall) (root_type flags) (Option.foldBack (List.foldBack (fun a b -> RawTForall(range_of_typevar a +. range_of_texpr b,a,b))))
+        |>> fun x -> Some (true, x)
+
+    let body = vanilla <|> gadt <|>% None
+    (range (optional bar >>. sepBy1 (range read_big_var_as_symbol .>>. body) bar)
     >>= fun (r,x) _ ->
         x |> List.map fst |> duplicates DuplicateUnionKey
         |> function 
-            | [] -> Ok(r,x |> List.mapi (fun i ((r,n),x) -> (i,n), match x with Some x -> x | None -> RawTB r) |> Map.ofList)
+            | [] -> Ok(r,x |> List.mapi (fun i ((r,n),x) -> (i,n), match x with Some x -> x | None -> false, RawTB r) |> Map.ofList)
             | er -> Error er
         ) d
 and root_type (flags : RootTypeFlags) d =
@@ -1117,7 +1136,7 @@ and root_term d =
             let sequence_type d = (many (indent (col d) (=) (sepBy1 (root_type root_type_defaults)  (skip_op ";"))) |>> List.concat) d
             ((skip_keyword' SpecExists) .>>. (opt (squares sequence_type)) .>>. next)
              >>= fun ((r,type_vars),body) d -> 
-                if d.is_top_down || Option.isSome type_vars then Ok(RawExists(range_of_expr body,type_vars, body))
+                if d.is_top_down || Option.isSome type_vars then Ok(RawExists(r +. range_of_expr body, (r, type_vars), body))
                 else Error [r, TypeVarsNeedToBeExplicitForExists]
         let case_rounds = 
             range (rounds ((((read_op' |>> RawV) <|> next) |>> fun x _ -> x) <|>% RawB))
@@ -1386,9 +1405,10 @@ let top_inl_or_let_process comments is_top_down = function
 let top_inl_or_let d = ((comments .>>. inl_or_let root_term root_pattern_pair root_type_annot) >>= fun (comments,x) d -> top_inl_or_let_process comments d.is_top_down x) d
 
 let process_union (r,(layout,n,a,(r',b))) _ =
+    let this = (RawTVar n,a) ||> List.fold (fun s x -> RawTApply(r',s,RawTVar(r',hovar_name x)))
     match layout with
-    | UHeap -> Ok(TopNominalRec(r,n,a,RawTUnion(r',b,layout)))
-    | UStack -> Ok(TopNominal(r,n,a,RawTUnion(r',b,layout)))
+    | UHeap -> Ok(TopNominalRec(r,n,a,RawTUnion(r',b,layout,this)))
+    | UStack -> Ok(TopNominal(r,n,a,RawTUnion(r',b,layout,this)))
 
 let union_clauses d = root_type_union root_type_defaults d
 let top_union d = ((range (tuple4 (skip_keyword SpecUnion >>. ((skip_keyword SpecRec >>% UHeap) <|>% UStack)) read_small_type_var' (many ho_var .>> skip_op "=") union_clauses)) >>= process_union) d

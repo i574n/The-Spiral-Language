@@ -49,7 +49,8 @@ let rec fold_offset_ty offset x =
     | RawTPair(r,a,b) -> RawTPair(g r,f a,f b)
     | RawTFun(r,a,b,t) -> RawTFun(g r,f a,f b,t)
     | RawTRecord(r,a) -> RawTRecord(g r,Map.map (fun _ -> f) a)
-    | RawTUnion(r,a,b) -> RawTUnion(g r,Map.map (fun _ -> f) a,b)
+    | RawTUnion(r,a,b,c) -> RawTUnion(g r,Map.map (fun _ (is_gadt,body) -> is_gadt, f body) a,b,f c)
+    | RawTTypecase(r,a,b) -> RawTTypecase(g r,f a,List.map (fun (a,b) -> f a, f b) b)
     | RawTSymbol(r,a) -> RawTSymbol(g r,a)
     | RawTApply(r,a,b) -> RawTApply(g r,f a,f b)
     | RawTForall(r,a,b) -> RawTForall(g r,add_offset_typevar offset a,f b)
@@ -81,7 +82,7 @@ and fold_offset_term offset x =
     | RawMatch(r,a,b) -> RawMatch(g r,f a,List.map (fun (a,b) -> fold_offset_pattern offset a,f b) b)
     | RawFun(r,a) -> RawFun(g r,List.map (fun (a,b) -> fold_offset_pattern offset a,f b) a)
     | RawForall(r,a,b) -> RawForall(g r,add_offset_typevar offset a,f b)
-    | RawExists(r,a,b) -> RawExists(g r,Option.map (List.map ty) a, f b)
+    | RawExists(r,(r',a),b) -> RawExists(g r,(g r',Option.map (List.map ty) a),f b)
     | RawFilledForall(r,a,b) -> RawFilledForall(g r,a,f b)
     | RawRecBlock(r,a,b) -> RawRecBlock(g r,List.map (fun ((r,a),b) -> (g r,a),f b) a,f b)
     | RawRecordWith(r,a,b,c) -> 
