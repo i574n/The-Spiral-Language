@@ -1090,7 +1090,14 @@ let infer package_id module_id (top_env' : TopEnv) expr =
             | TyRecord l, TyRecord l' -> 
                 let a,b = Map.toArray l, Map.toArray l'
                 if a.Length <> b.Length then er ()
-                else Array.iter2 (fun (ka,a) (kb,b) -> if ka = kb then loop (a,b) else er()) a b
+                else
+                    let a = a |> Array.sortBy (fun ((_,k),_) -> k)
+                    let b = b |> Array.sortBy (fun ((_,k),_) -> k)
+                    Array.iter2 (fun (ka,a) (kb,b) ->
+                        if (ka |> snd) = (kb |> snd)
+                        then loop (a,b)
+                        else er()
+                    ) a b
             | TyNominal i, TyNominal i' when i = i' -> ()
             | TyB, TyB -> ()
             | TyPrim x, TyPrim x' when x = x' -> ()
