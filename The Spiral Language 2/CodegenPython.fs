@@ -100,14 +100,13 @@ type BindsReturn =
 let line x s = if s <> "" then x.text.Append(' ', x.indent).AppendLine s |> ignore
 
 let codegen' backend_handler (env : PartEvalResult) (x : TypedBind []) =
-    let globals = ResizeArray()
     let fwd_dcls = ResizeArray()
     let types = ResizeArray()
     let functions = ResizeArray()
 
     let global' =
         let has_added = HashSet()
-        fun x -> if has_added.Add(x) then globals.Add x
+        fun x -> if has_added.Add(x) then env.globals.Add x
 
     let import x = global' $"import {x}"
     let from x = global' $"from {x}"
@@ -434,8 +433,8 @@ let codegen' backend_handler (env : PartEvalResult) (x : TypedBind []) =
     import "cupy as cp"
     from "dataclasses import dataclass"
     from "typing import NamedTuple, Union, Callable, Tuple"
-    globals.Add "i8 = i16 = i32 = i64 = u8 = u16 = u32 = u64 = int; f32 = f64 = float; char = string = str"
-    globals.Add ""
+    env.globals.Add "i8 = i16 = i32 = i64 = u8 = u16 = u32 = u64 = int; f32 = f64 = float; char = string = str"
+    env.globals.Add ""
 
     let main = StringBuilder()
     let s = {text=main; indent=0}
@@ -446,7 +445,7 @@ let codegen' backend_handler (env : PartEvalResult) (x : TypedBind []) =
     line s "if __name__ == '__main__': result = main(); None if result is None else print(result)"
 
     let program = StringBuilder()
-    globals |> Seq.iter (fun x -> program.AppendLine(x) |> ignore)
+    env.globals |> Seq.iter (fun x -> program.AppendLine(x) |> ignore)
     fwd_dcls |> Seq.iter (fun x -> program.AppendLine(x) |> ignore)
     types |> Seq.iter (fun x -> program.Append(x) |> ignore)
     functions |> Seq.iter (fun x -> program.Append(x) |> ignore)

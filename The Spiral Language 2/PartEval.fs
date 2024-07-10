@@ -151,6 +151,7 @@ type LangEnv = {
     env_stack_type : Ty []
     env_stack_term : Data []
     backend : string ConsedNode
+    globals : ResizeArray<string>
     }
 
 type TopEnv = {
@@ -520,6 +521,7 @@ type PartEvalResult = {
     join_point_closure : Dictionary<string ConsedNode * E,Dictionary<ConsedNode<RData [] * Ty [] * Ty>,(Data * TypedBind []) option> * HashConsTable>
     ty_to_data : Ty -> Data
     nominal_apply : Ty -> Ty
+    globals : ResizeArray<string>
     }
 
 
@@ -579,6 +581,7 @@ let peval (env : TopEnv) (x : E) =
         env_stack_type = Array.zeroCreate<_> sz_ty
         env_stack_term = Array.zeroCreate<_> sz_term
         backend = s.backend
+        globals = s.globals
         }
     and closure_convert s (body,annot,gl_term,gl_ty,sz_term,sz_ty as args) =
         let join_point_key, call_args, fun_ty =
@@ -736,6 +739,7 @@ let peval (env : TopEnv) (x : E) =
                     env_stack_type = Array.zeroCreate<_> scope.ty.stack_size
                     env_stack_term = Array.zeroCreate<_> scope.term.stack_size
                     backend = s.backend
+                    globals = s.globals
                     }
                 let s = rename_global_term s
                 dict.[join_point_key] <- None
@@ -815,6 +819,11 @@ let peval (env : TopEnv) (x : E) =
         | TArray a -> YArray(ty s a)
         | TLayout(a,b) -> YLayout(ty s a,b)
     and term (s : LangEnv) x =
+
+        let global' =
+            let has_added = HashSet()
+            fun x -> if has_added.Add(x) then s.globals.Add x
+
         let term2 s a b = term s a, term s b
         let term3 s a b c = term s a, term s b, term s c
         let type_apply s a b =
@@ -1109,6 +1118,7 @@ let peval (env : TopEnv) (x : E) =
                         env_stack_type = Array.zeroCreate<_> scope.ty.stack_size
                         env_stack_term = Array.zeroCreate<_> scope.term.stack_size
                         backend = backend'
+                        globals = s.globals
                         }
                     let s = rename_global_term s
                     let annot = Option.map (ty s) annot
@@ -2407,7 +2417,9 @@ let peval (env : TopEnv) (x : E) =
             | a -> raise_type_error s <| sprintf "Expected an union.\nGot: %s" (show_data a)
         | EOp(_,Global & op,[a]) ->
             match term s a with
-            | DLit (LitString _) & a -> push_op_no_rewrite s op a YB
+            | DLit (LitString text) & a ->
+                global' text
+                push_op_no_rewrite s op a YB
             | a -> raise_type_error s $"Expected a string literal.\nGot: {show_data a}"
         | EOp(_,ToPythonRecord,[a]) ->
             match term s a |> dyn false s with
@@ -2519,11 +2531,12 @@ let peval (env : TopEnv) (x : E) =
         env_stack_type = [||]
         env_stack_term = [||]
         backend = backend_strings.Add env.backend
+        globals = ResizeArray ()
         }
     let ty_to_data x = ty_to_data {s with i = ref 0} x
     let nominal_apply x = nominal_type_apply {s with i = ref 0} x
 
     match x with
-    | EFun'(r,_,_,_,_) -> term_scope s (EApply(r,x,EB r)), {join_point_method=join_point_method; join_point_closure=join_point_closure; ty_to_data=ty_to_data; nominal_apply=nominal_apply}
+    | EFun'(r,_,_,_,_) -> term_scope s (EApply(r,x,EB r)), {join_point_method=join_point_method; join_point_closure=join_point_closure; ty_to_data=ty_to_data; nominal_apply=nominal_apply; globals=s.globals}
     | EForall' _ -> raise_type_error s "The main function should not have a forall."
     | _ -> raise_type_error s "Expected a function as the main."

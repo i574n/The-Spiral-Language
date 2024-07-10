@@ -83,7 +83,6 @@ type MethodRec = {tag : int; free_vars : L<Tag,Ty>[]; range : Ty; body : TypedBi
 type ClosureRec = {tag : int; free_vars : L<Tag,Ty>[]; domain_args : TyV[]; range : Ty; body : TypedBind[]}
 
 let codegen (env : PartEvalResult) (x : TypedBind []) =
-    let globals = ResizeArray()
     let types = ResizeArray()
     let functions = ResizeArray()
 
@@ -132,7 +131,7 @@ let codegen (env : PartEvalResult) (x : TypedBind []) =
 
     let global' =
         let has_added = HashSet()
-        fun x -> if has_added.Add(x) then globals.Add x
+        fun x -> if has_added.Add(x) then env.globals.Add x
 
     let rec tyv = function
         | YUnion a -> 
@@ -444,7 +443,7 @@ let codegen (env : PartEvalResult) (x : TypedBind []) =
     binds {text=main; indent=0} x
 
     let program = StringBuilder()
-    globals |> Seq.iter (fun (x : string) -> program.AppendLine(x) |> ignore)
+    env.globals |> Seq.iter (fun (x : string) -> program.AppendLine(x) |> ignore)
     types |> Seq.iteri (fun i x -> program.Append(if i = 0 then "type " else "and ").Append(x) |> ignore)
     functions |> Seq.iteri (fun i x -> program.Append(if i = 0 then "let rec " else "and ").Append(x) |> ignore)
     program.Append(main).ToString()
