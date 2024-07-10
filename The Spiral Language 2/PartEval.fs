@@ -2418,7 +2418,12 @@ let peval (env : TopEnv) (x : E) =
         | EOp(_,Global & op,[a]) ->
             match term s a with
             | DLit (LitString text) & a ->
-                if s.i.contents = 0 && s.cse |> List.map _.Count = [ 0; 0 ] then global' text
+                // if text.Contains "import " || text.Contains "Fable" then
+                //     let s = { s with trace = []; seq = ResizeArray() }
+                //     let l = s.cse |> List.map _.Count |> List.filter ((=) 0) |> List.length
+                //     Console.WriteLine ($"global / text: {text} / s: %A{s} / l: {l}")
+                if s.i.contents < 2 && s.cse |> List.map _.Count |> List.filter ((=) 0) |> List.length = 2
+                then global' text
                 push_op_no_rewrite s op a YB
             | a -> raise_type_error s $"Expected a string literal.\nGot: {show_data a}"
         | EOp(_,ToPythonRecord,[a]) ->
