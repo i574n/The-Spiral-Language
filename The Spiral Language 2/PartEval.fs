@@ -821,7 +821,7 @@ let peval (env : TopEnv) (x : E) =
     and term (s : LangEnv) x =
 
         let global' =
-            let has_added = HashSet()
+            let has_added = HashSet s.globals
             fun x -> if has_added.Add(x) then s.globals.Add x
 
         let term2 s a b = term s a, term s b
@@ -2418,7 +2418,7 @@ let peval (env : TopEnv) (x : E) =
         | EOp(_,Global & op,[a]) ->
             match term s a with
             | DLit (LitString text) & a ->
-                global' text
+                if s.i.contents = 0 && s.cse |> List.map _.Count = [ 0; 0 ] then global' text
                 push_op_no_rewrite s op a YB
             | a -> raise_type_error s $"Expected a string literal.\nGot: {show_data a}"
         | EOp(_,ToPythonRecord,[a]) ->

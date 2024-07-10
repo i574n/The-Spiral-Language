@@ -105,7 +105,7 @@ let codegen' backend_handler (env : PartEvalResult) (x : TypedBind []) =
     let functions = ResizeArray()
 
     let global' =
-        let has_added = HashSet()
+        let has_added = HashSet env.globals
         fun x -> if has_added.Add(x) then env.globals.Add x
 
     let import x = global' $"import {x}"

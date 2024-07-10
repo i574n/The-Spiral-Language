@@ -130,7 +130,7 @@ let codegen (env : PartEvalResult) (x : TypedBind []) =
     let show_w = function WV (L(i,_)) -> sprintf "v%i" i | WLit a -> lit a
 
     let global' =
-        let has_added = HashSet()
+        let has_added = HashSet env.globals
         fun x -> if has_added.Add(x) then env.globals.Add x
 
     let rec tyv = function
