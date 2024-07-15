@@ -277,7 +277,7 @@ export const activate = async (ctx: ExtensionContext) => {
     })
     workspace.textDocuments.forEach(onDocOpen)
 
-    const spiralFilePattern = {pattern: '**/*.{spi,spir}'}
+    const spiralFilePattern = {pattern: '**/*.{spi,spir,dib}'}
     const spiralProjFilePattern = {pattern: '**/package.spiproj'}
     const spiralTokenLegend = ['variable','symbol','string','number','operator','unary_operator','comment','keyword','parenthesis','type_variable','escaped_char','unescaped_char','number_suffix','escaped_var']
     ctx.subscriptions.push(

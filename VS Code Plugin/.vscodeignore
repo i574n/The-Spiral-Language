@@ -8,3 +8,4 @@ keys.json
 .gitignore
 .vscodeignore
 package-lock.json
+bun.lockb

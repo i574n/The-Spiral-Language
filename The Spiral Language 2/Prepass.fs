@@ -359,8 +359,22 @@ let union small big = {
     prototypes_instances = Map.foldBack Map.add small.prototypes_instances big.prototypes_instances
     nominals_next_tag = max small.nominals_next_tag big.nominals_next_tag
     nominals = Map.foldBack Map.add small.nominals big.nominals
-    term = Map.foldBack Map.add small.term big.term
-    ty = Map.foldBack Map.add small.ty big.ty
+    term =
+        Map.foldBack (fun k v s ->
+            let v =
+                match v, s |> Map.tryFind k with
+                | EModule x, Some (EModule x') -> Map.foldBack Map.add x x' |> EModule
+                | _ -> v
+            s |> Map.add k v
+        ) small.term big.term
+    ty =
+        Map.foldBack (fun k v s ->
+            let v =
+                match v, s |> Map.tryFind k with
+                | TModule x, Some (TModule x') -> Map.foldBack Map.add x x' |> TModule
+                | _ -> v
+            s |> Map.add k v
+        ) small.ty big.ty
     }
     
 let in_module m (a : PrepassTopEnv) =

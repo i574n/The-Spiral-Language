@@ -14,7 +14,6 @@
 	"module": "true",
 	"main": "out/index.js",
 	"activationEvents": [
-    "onLanguage:spiral",
     "onNotebook:dotnet-interactive",
     "onNotebook:dotnet-interactive-window",
     "onNotebook:jupyter-notebook",
@@ -112,6 +111,7 @@
 				"extensions": [
 					".spi",
 					".spir",
+					".dib",
 					".spiproj"
 				],
 				"aliases": [
@@ -172,7 +172,7 @@
     "npm-check-updates": "~17.0.0-5",
 		"@types/node": "~20.14",
 		"@types/vscode": "~1.81",
-		"@vscode/vsce": "~2.29",
+		"@vscode/vsce": "~2.30",
 		"esbuild": "~0.21",
 		"typescript": "next"
 	},

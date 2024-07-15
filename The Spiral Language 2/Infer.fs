@@ -200,9 +200,30 @@ let union small big = {
     prototypes_next_tag = max small.prototypes_next_tag big.prototypes_next_tag
     prototypes_instances = Map.foldBack Map.add small.prototypes_instances big.prototypes_instances
     prototypes = Map.foldBack Map.add small.prototypes big.prototypes
-    ty = Map.foldBack Map.add small.ty big.ty
-    term = Map.foldBack Map.add small.term big.term
-    constraints = Map.foldBack Map.add small.constraints big.constraints
+    ty =
+        Map.foldBack (fun k v s ->
+            let v =
+                match v, s |> Map.tryFind k with
+                | TyModule x, Some (TyModule x') -> Map.foldBack Map.add x x' |> TyModule
+                | _ -> v
+            s |> Map.add k v
+        ) small.ty big.ty
+    term =
+        Map.foldBack (fun k v s ->
+            let v =
+                match v, s |> Map.tryFind k with
+                | TyModule x, Some (TyModule x') -> Map.foldBack Map.add x x' |> TyModule
+                | _ -> v
+            s |> Map.add k v
+        ) small.term big.term
+    constraints =
+        Map.foldBack (fun k v s ->
+            let v =
+                match v, s |> Map.tryFind k with
+                | M x, Some (M x') -> Map.foldBack Map.add x x' |> M
+                | _ -> v
+            s |> Map.add k v
+        ) small.constraints big.constraints
     }
 
 let in_module m a =

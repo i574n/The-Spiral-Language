@@ -344,7 +344,7 @@ let show_ty x =
         | YSymbol x -> sprintf ".%s" x
         | YTypeFunction _ -> p 0 (sprintf "? => ?")
         | YExists -> p 0 (sprintf "exists ?. ?")
-        | YRecord l -> sprintf "{%s}" (l |> Map.toList |> List.map (fun ((i,k),v) -> sprintf "%s[%d] : %s" k i (f -1 v)) |> String.concat "; ")
+        | YRecord l -> sprintf "{%s}" (l |> Map.toList |> List.map (fun ((_,k),v) -> sprintf "%s : %s" k (f -1 v)) |> String.concat "; ")
         | YUnion l -> sprintf "{%s}" (l.Item.cases |> Map.toList |> List.map (fun ((_,k),v) -> sprintf "%s : %s" k (f -1 v)) |> String.concat " | ")
         | YPrim x -> show_primt x
         | YArray a -> p 30 (sprintf "array_base %s" (f 30 a))

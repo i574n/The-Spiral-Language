@@ -42,7 +42,7 @@ let rec file_hierarchy p =
     (many expr |>> fun l ->
         let _ = 
             l |> List.toArray
-            |> Array.map (fun (File(_,(a,b),_,_) | Directory(_,(a,b),_)) -> b,a)
+            |> Array.choose (function | File(_,(a,b),_,_) -> Some (b,a) | _ -> None)
             |> Array.groupBy fst
             |> Array.choose (fun (a,b) -> if b.Length > 1 then Some (Array.map snd b) else None)
             |> add_to_exception_list p DuplicateFiles
