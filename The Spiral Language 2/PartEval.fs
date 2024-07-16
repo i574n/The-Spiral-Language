@@ -370,7 +370,7 @@ let show_data x =
         | DExists(a,b) ->
             let a = Array.map (show_ty >> sprintf "(%s)") a |> String.concat " "
             p 0 $"exists {a}. %s{f 0 b}"
-        | DRecord l -> sprintf "{%s}" (l |> Map.toList |> List.map (fun ((i,k),v) -> sprintf "%s[[%d]] : %s" k i (f -1 v)) |> String.concat "; ")
+        | DRecord l -> sprintf "{%s}" (l |> Map.toList |> List.map (fun ((_,k),v) -> sprintf "%s : %s" k (f -1 v)) |> String.concat "; ")
         | DLit a -> show_lit a
         | DTLit a -> $"`{show_lit a}"
         | DV(L(_,ty)) -> show_ty ty
