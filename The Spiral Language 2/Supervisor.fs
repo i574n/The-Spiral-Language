@@ -15,7 +15,8 @@ open Hopac.Stream
 
 open Polyglot
 open Polyglot.Common
-open Lib.SpiralFileSystem.Operators
+open Lib
+open SpiralFileSystem.Operators
 
 type LocalizedErrors = {|uri : string; errors : RString list|}
 type TracedError = {|trace : string list; message : string|}
@@ -70,8 +71,8 @@ let proj_revalidate_owner default_env s file =
     let rec loop (x : DirectoryInfo) =
         if x = null then [||], s
         else
-            let x' = x.FullName |> Lib.SpiralFileSystem.normalize_path
-            trace Verbose (fun () -> $"""Supervisor.proj_revalidate_owner / x.FullName: {x.FullName |> Lib.SpiralSm.replace "\\" "|"} / x': {x'}""") _locals
+            let x' = x.FullName |> SpiralFileSystem.normalize_path
+            trace Verbose (fun () -> $"""Supervisor.proj_revalidate_owner / x.FullName: {x.FullName |> SpiralSm.replace "\\" "|"} / x': {x'}""") _locals
             let x_ = x
             let x = {| FullName = x' |}
             if Map.containsKey x.FullName s.packages then proj_validate default_env s (HashSet [x.FullName])
@@ -92,7 +93,7 @@ let file_delete default_env s (files : string []) =
     let revalidate_parent x =
         let rec loop (x : DirectoryInfo) =
             if x <> null then
-                let x' = x.FullName |> Lib.SpiralFileSystem.normalize_path
+                let x' = x.FullName |> SpiralFileSystem.normalize_path
                 trace Verbose (fun () -> $"Supervisor.file_delete.revalidate_parent.loop / x.FullName: {x.FullName} / x': {x'}") _locals
                 let x = DirectoryInfo x'
                 if Map.containsKey x.FullName s.packages then dirty_packages.Add(x.FullName) |> ignore
@@ -139,7 +140,7 @@ let attention_server (errors : SupervisorErrorSources) (req : _ Ch) =
                     next ers
 
         let loop_module (s : AttentionState) mpath (m : WDiff.ModuleState) =
-            let mpath' = mpath |> Lib.SpiralFileSystem.normalize_path
+            let mpath' = mpath |> SpiralFileSystem.normalize_path
             let uri = Utils.file_uri mpath
             trace Verbose (fun () -> $"Supervisor.attention_server.loop.loop_module / mpath: {mpath} / mpath': {mpath'} / uri: {uri}") _locals
             let mpath = mpath'
@@ -157,7 +158,7 @@ let attention_server (errors : SupervisorErrorSources) (req : _ Ch) =
 
         let rec loop_package (s : AttentionState) pdir = function
             | (mpath,l) :: ls ->
-                let mpath' = mpath |> Lib.SpiralFileSystem.normalize_path
+                let mpath' = mpath |> SpiralFileSystem.normalize_path
                 let uri = Utils.file_uri mpath
                 trace Verbose (fun () -> $"Supervisor.attention_server.loop.loop_package / mpath: {mpath} / mpath': {mpath'} / uri: {uri} / pdir: {pdir}") _locals
                 let mpath = mpath'
@@ -177,7 +178,7 @@ let attention_server (errors : SupervisorErrorSources) (req : _ Ch) =
         let package s =
             match s.packages with
             | se,x :: xs ->
-                let x' = x |> Lib.SpiralFileSystem.normalize_path
+                let x' = x |> SpiralFileSystem.normalize_path
                 trace Verbose (fun () -> $"Supervisor.attention_server.loop.package / x: {x} / x': {x'}") _locals
                 let x = x'
                 let s = {s with packages=Set.remove x se,xs}
@@ -244,18 +245,18 @@ type BuildResult =
     | BuildFatalError of string
     | BuildSkip
 
-let workspaceRoot = Lib.SpiralFileSystem.get_workspace_root ()
+let workspaceRoot = SpiralFileSystem.get_workspace_root ()
 let targetDir = workspaceRoot </> "target/spiral_Eval"
 let traceDir = targetDir </> "supervisor_trace"
 let dir uri =
     let result = FileInfo(Uri(uri).LocalPath).Directory.FullName
-    let result' = result |> Lib.SpiralFileSystem.normalize_path
+    let result' = result |> SpiralFileSystem.normalize_path
     trace Verbose (fun () -> $"Supervisor.dir / uri: {uri} / result: {result} / result': {result'}") _locals
     result'
 let file uri =
     let result = FileInfo(Uri(uri).LocalPath).FullName
-    let result' = result |> Lib.SpiralFileSystem.normalize_path
-    let result = result |> Lib.SpiralSm.replace "\\" "|"
+    let result' = result |> SpiralFileSystem.normalize_path
+    let result = result |> SpiralSm.replace "\\" "|"
     trace Verbose (fun () -> $"Supervisor.file / uri: {uri} / result: {result} / result': {result'}") _locals
     result'
 let supervisor_server (default_env : Startup.DefaultEnv) atten (errors : SupervisorErrorSources) req =
@@ -351,13 +352,26 @@ let supervisor_server (default_env : Startup.DefaultEnv) atten (errors : Supervi
             Hopac.start (IVar.fill res {|result=error|})
             s
         | FileTokenRange(x, res) ->
-            match Map.tryFind (file x.uri) s.modules with
+            let v =
+                match Map.tryFind (file x.uri) s.modules with
+                | Some v -> Some v
+                | None when x.uri |> SpiralSm.ends_with ".dib" ->
+                    x.uri
+                    |> SpiralSm.replace "file:///" ""
+                    |> File.ReadAllText
+                    |> WDiff.wdiff_module_init_all default_env (is_top_down x.uri)
+                    |> Some
+                | None -> None
+
+            match v with
             | Some v ->
                 Hopac.start (BlockBundling.semantic_tokens v.parser >>= (Tokenize.vscode_tokens x.range >> IVar.fill res))
             | None ->
-                trace Debug
-                    (fun () -> $"Supervisor.supervisor_server.FileTokenRange")
-                    (fun () -> $"module=None / x.uri: {x.uri} / {_locals ()}")
+                if x.uri |> SpiralSm.starts_with "vscode-notebook-cell" |> not then
+                    trace Debug
+                        (fun () -> $"Supervisor.supervisor_server.FileTokenRange")
+                        (fun () -> $"module=None / x.uri: {x.uri} / {_locals ()}")
+
                 Hopac.start (IVar.fill res [||])
             s
         | HoverAt(x,res) ->
@@ -389,7 +403,7 @@ let supervisor_server (default_env : Startup.DefaultEnv) atten (errors : Supervi
             let rec go_parent (x : DirectoryInfo) =
                 if x = null then false
                 else
-                    let path = x.FullName |> Lib.SpiralFileSystem.normalize_path
+                    let path = x.FullName |> SpiralFileSystem.normalize_path
                     trace Verbose (fun () -> $"Supervisor.supervisor_server.HoverAt.go_parent / path: {path}") _locals
                     if Map.containsKey path s.packages then
                         let pid = (fst s.package_ids).[path]
@@ -417,7 +431,7 @@ let supervisor_server (default_env : Startup.DefaultEnv) atten (errors : Supervi
                     trace Debug (fun () -> $"Supervisor.supervisor_server.BuildFile.handle_build_result.BuildSkip") _locals
                     Job.unit ()
             let file_build (s : SupervisorState) mid (tc : WDiff.ProjStateTC, prepass : WDiffPrepass.ProjStatePrepass) =
-                trace Verbose (fun () -> $"""Supervisor.supervisor_server.BuildFile.file_build / modules: %A{s.modules.Keys |> Lib.SpiralSm.concat ", "} / packages: %A{s.packages.Keys |> Lib.SpiralSm.concat ", "} / package_ids: %A{s.package_ids |> fst |> fun x -> x.Keys |> Lib.SpiralSm.concat ", "}""") _locals
+                trace Verbose (fun () -> $"""Supervisor.supervisor_server.BuildFile.file_build / modules: %A{s.modules.Keys |> SpiralSm.concat ", "} / packages: %A{s.packages.Keys |> SpiralSm.concat ", "} / package_ids: %A{s.package_ids |> fst |> fun x -> x.Keys |> SpiralSm.concat ", "}""") _locals
                 let a,b = tc.files.uids_file.[mid]
                 let x,_ = prepass.files.uids_file.[mid]
                 Hopac.start (a.state >>= fun (has_error',_) ->
@@ -453,11 +467,11 @@ let supervisor_server (default_env : Startup.DefaultEnv) atten (errors : Supervi
                                 | :? CodegenUtils.CodegenErrorWithPos as e -> BuildErrorTrace(show_trace s e.Data0 e.Data1)
                                 | ex ->
                                 if Directory.Exists traceDir then
-                                    let guid = DateTime.Now |> Lib.SpiralDateTime.new_guid_from_date_time
+                                    let guid = DateTime.Now |> SpiralDateTime.new_guid_from_date_time
                                     let trace_file = traceDir </> $"{guid}_error.json"
                                     async {
                                         try
-                                            do! $"{ex}" |> Lib.SpiralFileSystem.write_all_text_async trace_file
+                                            do! $"{ex}" |> SpiralFileSystem.write_all_text_async trace_file
                                         with ex ->
                                             trace Critical (fun () -> $"Supervisor.supervisor_server.BuildFile.file_build / ex: {ex |> Sm.format_exception}") _locals
                                     }
@@ -494,8 +508,8 @@ let supervisor_server (default_env : Startup.DefaultEnv) atten (errors : Supervi
             let rec find_owner (x : DirectoryInfo) =
                 if x = null then fatal $"Cannot find the package file of {file}"; s
                 else
-                    let x' = x.FullName |> Lib.SpiralFileSystem.normalize_path
-                    trace Verbose (fun () -> $"""Supervisor.supervisor_server.BuildFile.find_owner / x.FullName: {x.FullName |> Lib.SpiralSm.replace "\\" "|"} / x': {x'}""") _locals
+                    let x' = x.FullName |> SpiralFileSystem.normalize_path
+                    trace Verbose (fun () -> $"""Supervisor.supervisor_server.BuildFile.find_owner / x.FullName: {x.FullName |> SpiralSm.replace "\\" "|"} / x': {x'}""") _locals
                     let x_ = x
                     let x = {| FullName = x' |}
                     if Map.containsKey x.FullName s.packages then update_owner x.FullName
@@ -565,13 +579,13 @@ type SpiralHub(supervisor : Supervisor) =
             | Ping _ -> ()
             | _ ->
                 let req_name = client_req.GetType().Name
-                let guid = DateTime.Now |> Lib.SpiralDateTime.new_guid_from_date_time
+                let guid = DateTime.Now |> SpiralDateTime.new_guid_from_date_time
                 let trace_file = traceDir </> $"{guid}_{req_name}.json"
                 
                 async {
                     do! Async.Sleep 500
                     try
-                        do! x |> Lib.SpiralFileSystem.write_all_text_async trace_file
+                        do! x |> SpiralFileSystem.write_all_text_async trace_file
                     with ex ->
                         trace Critical (fun () -> $"SpiralHub.ClientToServerMsg / ex: {ex |> Sm.format_exception}") _locals
                 }
@@ -608,7 +622,7 @@ open Microsoft.Extensions.DependencyInjection
 open Microsoft.Extensions.Logging
 
 let [<EntryPoint>] main args =
-    Lib.SpiralTrace.TraceLevel.US0_1 |> Lib.set_trace_level
+    SpiralTrace.TraceLevel.US0_1 |> set_trace_level
     // Scheduler.Global.setCreate { Scheduler.Create.Def with MaxStackSize = 1024 * 8192 |> Some }
 
     let env = Startup.parse args
