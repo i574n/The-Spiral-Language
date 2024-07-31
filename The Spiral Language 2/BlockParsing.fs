@@ -29,6 +29,7 @@ type Op =
     // Compile time hash map
     | HashMapCreate
     | HashMapSetImmutable
+    | HashMapSet
     | HashMapAdd
     | HashMapTryAdd
     | HashMapContains
@@ -87,6 +88,7 @@ type Op =
     | StringLength
     | StringIndex
     | StringSlice
+    | StaticStringConcat
 
     // Array
     | ArrayCreate
@@ -301,7 +303,7 @@ and Pattern =
     | PatFilledDefaultValue of VSCRange * VarString * RawTExpr // Filled in by the inferencer.
 and RawExpr =
     | RawB of VSCRange
-    | RawV of VSCRange * VarString
+    | RawV of VSCRange * VarString * is_tvar_applied : bool
     | RawLit of VSCRange * Literal
     | RawDefaultLit of VSCRange * string
     | RawSymbol of VSCRange * SymbolString
@@ -389,7 +391,7 @@ let range_of_expr = function
     | RawB r
     | RawMissingBody r
     | RawMacro(r,_)
-    | RawV(r,_)
+    | RawV(r,_,_)
     | RawLit(r,_)
     | RawDefaultLit(r,_)
     | RawSymbol(r,_)
@@ -414,6 +416,8 @@ let range_of_expr = function
     | RawRecordWith(r,_,_,_)
     | RawIfThenElse(r,_,_,_)
     | RawOpen(r,_,_,_) -> r
+
+let rawv (r,x) = RawV(r,x,true)
     
 let range_of_texpr = function
     | RawTWildcard r
@@ -509,7 +513,7 @@ let read_text is_term_macro d =
 
 let read_macro_var d =
     try_current d <| function
-        | p, TokMacroTermVar x -> skip d; Ok(RawMacroTerm(p,RawV(p,x)))
+        | p, TokMacroTermVar x -> skip d; Ok(RawMacroTerm(p,rawv(p,x)))
         | p, TokMacroTypeVar x -> skip d; Ok(RawMacroType(p,RawTVar(p,x)))
         | p, TokMacroTypeLitVar x -> skip d; Ok(RawMacroTypeLit(p,RawTVar(p,x)))
         | p,_ -> Error [p, ExpectedMacroVar]
@@ -765,7 +769,7 @@ let rec adjust_join_point is_let name x =
         let empty = fst r, fst r
         let n = unintern " arg"
         let a = PatVar(empty,n) |> dyn_if_let
-        let b = RawMatch(empty,RawV(empty,n),l)
+        let b = RawMatch(empty,rawv(empty,n),l)
         RawFun(r,[a,join_point is_let name b])
     | x -> join_point is_let name x
 
@@ -909,7 +913,7 @@ let op (d : Env) =
                     let a,b = loop [] a
                     RawHeapMutableSet(r,a,b,c)
                     )
-                | x -> f (fun (r,a,b) -> RawApply(r,RawApply(r +. o,RawV(o,x),a),b))
+                | x -> f (fun (r,a,b) -> RawApply(r,RawApply(r +. o,rawv(o,x),a),b))
         )
 
 let private string_to_op_dict = Collections.Generic.Dictionary(HashIdentity.Structural)
@@ -1098,7 +1102,7 @@ and root_type (flags : RootTypeFlags) d =
         let wildcard d = if flags.allow_wildcard then (skip_keyword' SpecWildcard |>> RawTWildcard) d else Error []
         // This metavar case only occurs in typecase during the bottom-up segment. It should not be confused with metavars during top-down type inference.
         let metavar d = if flags.allow_typecase_metavars then (skip_unary_op "~" >>. read_var' |>> fun (a,b,r) -> r SemanticTokenLegend.type_variable; RawTMetaVar(a,b)) d else Error []
-        let term d = if flags.allow_term then (range (skip_unary_op "`" >>. ((read_var'' |>> RawV) <|> rounds root_term)) |>> RawTTerm) {d with is_top_down=false} else Error []
+        let term d = if flags.allow_term then (range (skip_unary_op "`" >>. ((read_var'' |>> rawv) <|> rounds root_term)) |>> RawTTerm) {d with is_top_down=false} else Error []
         let symbol = read_symbol |>> RawTSymbol
         let record = root_type_record flags
         let lit = (read_value |>> RawTLit) <|> (read_string |>> fun (a,b,c) -> RawTLit(a +. c, LitString b))
@@ -1115,7 +1119,7 @@ and root_type (flags : RootTypeFlags) d =
                 <|> macro_expression MTypeLit (root_type root_type_defaults |>> fun x -> RawMacroTypeLit(range_of_texpr x,x))) s
             let body = many ((read_text false |>> RawMacroText) <|> read_macro_type_var <|> read_macro_expression)
             pipe3 skip_macro_open body skip_macro_close (fun a l b -> RawTMacro(a +. b, l))
-        let exists = range (exists .>>. root_type {flags with allow_wildcard=false}) |>> fun (r,(l,b)) -> RawTExists(r,l,b)
+        let exists = range (exists .>>. root_type {flags with allow_wildcard=false}) |>> fun (r,(l,b)) -> RawTExists(r,l,b) // TODO: Move this next to the foralls.
         let (+) = alt (index d)
         (rounds + lit + lit_default + wildcard + term + metavar + var + record + symbol + macro + exists) d
 
@@ -1125,21 +1129,23 @@ and root_type (flags : RootTypeFlags) d =
     
     let pairs = sepBy1 apply (skip_op "*") |>> List.reduceBack (fun a b -> RawTPair(range_of_texpr a +. range_of_texpr b,a,b))
     let functions = sepBy1 pairs (skip_op "->") |>> List.reduceBack (fun a b -> RawTFun(range_of_texpr a +. range_of_texpr b,a,b,FT_Vanilla))
-    functions d
+    let foralls = pipe2 (opt forall) functions (Option.foldBack (List.foldBack (fun a b -> RawTForall(range_of_typevar a +. range_of_texpr b,a,b))))
+    
+    foralls d
 
 and root_term d =
     let rec expressions d =
         let next = root_term
-        let case_var = read_var'' |>> RawV
+        let case_var = read_var'' |>> rawv
         let case_value = read_value |>> RawLit
         let case_exists = 
             let sequence_type d = (many (indent (col d) (=) (sepBy1 (root_type root_type_defaults)  (skip_op ";"))) |>> List.concat) d
             ((skip_keyword' SpecExists) .>>. (opt (squares sequence_type)) .>>. next)
-             >>= fun ((r,type_vars),body) d -> 
+             >>= fun ((r,type_vars),body) d ->
                 if d.is_top_down || Option.isSome type_vars then Ok(RawExists(r +. range_of_expr body, (r, type_vars), body))
                 else Error [r, TypeVarsNeedToBeExplicitForExists]
         let case_rounds = 
-            range (rounds ((((read_op' |>> RawV) <|> next) |>> fun x _ -> x) <|>% RawB))
+            range (rounds ((((read_op' |>> rawv) <|> next) |>> fun x _ -> x) <|>% RawB))
             |>> fun (r,x) -> x r
         let case_fun =
             (skip_keyword SpecFun >>. many1 root_pattern_pair .>>. (annotated_body "=>" next root_type_annot))
@@ -1159,7 +1165,7 @@ and root_term d =
                     | ers -> Error ers) d
 
         let case_default_value = read_default_value RawDefaultLit RawLit
-        let case_if_then_else d = 
+        let case_if_then_else d =
             let i = col d
             let inline f' keyword = range (skip_keyword keyword >>. next)
             let inline f keyword = indent i (<=) (f' keyword)
@@ -1200,13 +1206,13 @@ and root_term d =
             let var = range record_var
             let inject = skip_unary_op "$" >>. range read_small_var
             let record_create_body =
-                (var .>>. opt create |>> function (a,Some b) -> RawRecordWithSymbol(a,b) | (a,None) -> RawRecordWithSymbol(a,RawV(a)))
+                (var .>>. opt create |>> function (a,Some b) -> RawRecordWithSymbol(a,b) | (a,None) -> RawRecordWithSymbol(a,rawv a))
                 <|> (inject .>>. create |>> RawRecordWithInjectVar)
             let record_create = range (curlies (sepBy record_create_body (optional (skip_op ";")))) |>> fun (r,withs) -> (r,[],withs,[])
             let record_with_bodies =
                 (var >>= fun a ->
                     ((modify |>> fun b -> RawRecordWithSymbolModify(a,b))
-                    <|> (opt create |>> function Some b -> RawRecordWithSymbol(a,b) | None -> RawRecordWithSymbol(a,RawV(a)))))
+                    <|> (opt create |>> function Some b -> RawRecordWithSymbol(a,b) | None -> RawRecordWithSymbol(a,rawv a))))
                 <|> (inject >>= fun a ->
                     ((modify |>> fun b -> RawRecordWithInjectVarModify(a,b))
                     <|> (create |>> fun b -> RawRecordWithInjectVar(a,b))))
@@ -1215,10 +1221,10 @@ and root_term d =
                 range
                     (curlies
                         (tuple4 read_small_var'
-                            (many ((read_symbol |>> RawSymbol) <|> (skip_op "$" >>. read_small_var' |>> RawV)))
+                            (many ((read_symbol |>> RawSymbol) <|> (skip_op "$" >>. read_small_var' |>> rawv)))
                             ((skip_keyword SpecWith >>. sepBy record_with_bodies (optional (skip_op ";"))) <|>% [])
                             ((skip_keyword SpecWithout >>. many record_without_bodies) <|>% [])))
-                |>> fun (r,(name, acs, withs, withouts)) -> (r,RawV name :: acs,withs,withouts)
+                |>> fun (r,(name, acs, withs, withouts)) -> (r,rawv name :: acs,withs,withouts)
 
             restore 2 record_create <|> record_with
             >>= fun (_,_,withs,withouts as x) _ ->
@@ -1237,8 +1243,8 @@ and root_term d =
             if d.is_top_down then
                 let r = fst r, fst r
                 List.foldBack (fun a b -> 
-                    RawApply(r,RawV(r,unintern "Cons"),RawPair(r,a,b))
-                    ) l (RawV(r,unintern "Nil")) |> Ok
+                    RawApply(r,rawv(r,unintern "Cons"),RawPair(r,a,b))
+                    ) l (rawv(r,unintern "Nil")) |> Ok
             else
                 Error [r, ListLiteralsNotAllowedInBottomUp]
 
@@ -1276,7 +1282,7 @@ and root_term d =
                         |] d
                 let term_expr d =
                     choice [|
-                        read_var'' |>> RawV
+                        read_var'' |>> rawv
                         read_value |>> RawLit
                         read_default_value RawDefaultLit RawLit
                         read_string |>> fun (a,b,c) -> RawLit(a +. c, LitString b)
@@ -1284,7 +1290,7 @@ and root_term d =
                         |] d
                 match a with
                 | ";" -> 
-                    if d.is_top_down then (range (squares sequence_body) |>> fun (r,x) -> RawApply(o,RawV(o,unintern "array"), RawArray(o,x))) d
+                    if d.is_top_down then (range (squares sequence_body) |>> fun (r,x) -> RawApply(o,RawV(o,unintern "array",true), RawArray(o,x))) d
                     else Error [o, ArrayLiteralsNotAllowedInBottomUp]
                 | "!!!!" -> 
                     (range (read_big_var .>>. (rounds (sepBy (fun d -> unary_op {d with is_top_down=false}) (skip_op ","))))
@@ -1300,7 +1306,8 @@ and root_term d =
                             RawType(r', RawTTerm(r',RawOp(r',LitToTypeLit,[x])))
                             ) d
                 | "``" -> if d.is_top_down then Error [] else (range type_expr |>> fun (r,x) -> RawOp(o +. r,TypeToVar,[RawType(r,x)])) d
-                | _ -> (next |>> fun b -> RawApply(o +. range_of_expr b,RawV(o, "~" + a),b)) d
+                | "`$" -> (read_var'' |>> fun (r,x) -> RawV(r,x,false)) d
+                | _ -> (next |>> fun b -> RawApply(o +. range_of_expr b,rawv(o, "~" + a),b)) d
         (f <|> next) d
 
     and application (d: Env) =

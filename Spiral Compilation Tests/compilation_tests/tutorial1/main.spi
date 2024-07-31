@@ -1,34 +1,5 @@
-// union qwe y =
-//     | A :: qwe i32
-//     | B :: qwe f32
-
-// let f forall y. (x : qwe y) : y =
-//     match x with
-//     | A a =>
-//         inl a = a
-//         a
-//     | B a =>
-//         inl a = a
-//         a
-
-// inl main() : () = 
-//     inl x = f (A 2)
-//     inl x = f (B 3)
-//     ()
-
-union t x =
-    | A :: forall x. x -> t x
-    | B :: forall x y. x * y -> t (x * y)
-
-// union t x =
-//     | A : x
-//     | B : x
-
-let f forall y. (x : t y) : y =
-    match x with
-    | A a =>
-        inl a = a
-        a
-    | B a =>
-        inl a = a
-        a
+// Do higher ranked types work correctly?
+inl main() =
+    inl id forall t. (x : t) : t = x
+    inl f forall x. (id : forall t. t -> t) (x : x) : int * bool * float = id 1, id true, id 123
+    f `$id false

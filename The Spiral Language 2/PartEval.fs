@@ -49,6 +49,7 @@ and Ty =
     | YPair of Ty * Ty
     | YTypeFunction of body : T * ty : Ty [] * term_stack_size : StackSize * ty_stack_size : StackSize
     | YExists
+    | YForall
     | YRecord of Map<int * string, Ty>
     | YPrim of PrimitiveType
     | YArray of Ty
@@ -343,6 +344,7 @@ let show_ty x =
         | YPair(a,b) -> p 25 (sprintf "%s * %s" (f 25 a) (f 24 b))
         | YSymbol x -> sprintf ".%s" x
         | YTypeFunction _ -> p 0 (sprintf "? => ?")
+        | YForall -> p 0 (sprintf "forall ?. ?")
         | YExists -> p 0 (sprintf "exists ?. ?")
         | YRecord l -> sprintf "{%s}" (l |> Map.toList |> List.map (fun ((_,k),v) -> sprintf "%s : %s" k (f -1 v)) |> String.concat "; ")
         | YUnion l -> sprintf "{%s}" (l.Item.cases |> Map.toList |> List.map (fun ((_,k),v) -> sprintf "%s : %s" k (f -1 v)) |> String.concat " | ")
@@ -540,7 +542,7 @@ let peval (env : TopEnv) (x : E) =
         | YPair(a,b) -> DPair(f a, f b)
         | YSymbol a -> DSymbol a
         | YRecord l -> DRecord(Map.map (fun _ -> f) l)
-        | YExists | YUnion _ | YLayout _ | YPrim _ | YArray _ | YFun _ | YMacro _ as x -> let r = DV(L(!s.i,x)) in incr s.i; r
+        | YForall | YExists | YUnion _ | YLayout _ | YPrim _ | YArray _ | YFun _ | YMacro _ as x -> let r = DV(L(!s.i,x)) in incr s.i; r
         | YNominal _ | YApply _ as a -> DNominal(nominal_type_apply s a |> ty_to_data s, a)
         | YLit x -> DTLit x
         | YTypeFunction _ -> raise_type_error s "Cannot turn a type function into a runtime variable."
@@ -641,7 +643,7 @@ let peval (env : TopEnv) (x : E) =
                 | DFunction(body,Some annot,gl_term,gl_ty,sz_term,sz_ty) -> ty (closure_env s (body,annot,gl_term,gl_ty,sz_term,sz_ty)) annot
                 | DExists _ -> YExists
                 | DFunction(_,None,_,_,_,_) -> raise_type_error s "Cannot convert a function that is not annotated into a type."
-                | DForall _ -> raise_type_error s "Cannot convert a forall into a type."
+                | DForall _ -> YForall
                 | DHashSet _ -> raise_type_error s "Cannot convert a compile time HashSet into a type."
                 | DHashMap _ -> raise_type_error s "Cannot convert a compile time HashMap into a type."
                 ) x
@@ -657,14 +659,14 @@ let peval (env : TopEnv) (x : E) =
                 | DNominal(DUnion(DPair(DSymbol k,v),b),b') -> dirty <- true; push_typedop_no_rewrite s (TyUnionBox(k,f v,b)) b'
                 | DUnion _ -> raise_type_error s "Compiler error: Malformed union"
                 | DNominal(a,b) -> DNominal(f a,b)
-                | DExists(_,b) -> dirty <- true; push_op s Dyn b YExists
                 | DLit (LitString _ as v) -> dirty <- true; push_op s Dyn x (lit_to_ty v)
                 | DLit v as x -> if do_lit then dirty <- true; push_op_no_rewrite s Dyn x (lit_to_ty v) else x
                 | DFunction(body,Some annot,term',ty',sz_term,sz_ty) -> dirty <- true; closure_convert s (body,annot,term',ty',sz_term,sz_ty) |> fst
-                | DFunction(_,None,_,_,_,_) -> raise_type_error s "Cannot convert a function that is not annotated into a type."
-                | DForall _ -> raise_type_error s "Cannot convert a forall into a type."
-                | DHashSet _ -> raise_type_error s "Cannot convert a compile time HashSet into a type."
-                | DHashMap _ -> raise_type_error s "Cannot convert a compile time HashMap into a type."
+                | DFunction(_,None,_,_,_,_) -> raise_type_error s "Cannot convert a function that is not annotated into a runtime variable."
+                | DExists _ -> raise_type_error s "Cannot dyn an existential into a runtime var."
+                | DForall _ -> raise_type_error s "Cannot dyn a forall into a runtime var."
+                | DHashSet _ -> raise_type_error s "Cannot dyn a compile time HashSet into a runtime var."
+                | DHashMap _ -> raise_type_error s "Cannot dyn a compile time HashMap into a runtime var."
                 ) x
         let v = f x
         if dirty then v else x
@@ -711,11 +713,11 @@ let peval (env : TopEnv) (x : E) =
         match x with
         | TPatternRef _ -> failwith "Compiler error: TPatternRef should have been eliminated during the prepass."
         | TForall _ | TArrow _ | TJoinPoint _ -> failwith "Compiler error: Should have been transformed during the prepass."
-        | TForall'(_,_,_,x) -> raise_type_error s "Type level foralls are not allowed in the partial evaluation pass."
         | TMetaV i -> YMetavar i
         | TArrow'(scope,i,body) ->
             assert (i = scope.ty.free_vars.Length)
             YTypeFunction(body,Array.map (vt s) scope.ty.free_vars,scope.term.stack_size,scope.ty.stack_size)
+        | TForall' _ -> YForall
         | TExists -> YExists
         | TJoinPoint'(r,scope,body) ->
             let env_global_type = Array.map (vt s) scope.ty.free_vars
@@ -838,6 +840,7 @@ let peval (env : TopEnv) (x : E) =
                         }
                 s.env_stack_type.[0] <- b
                 term s body
+            | DV(L(_,YForall)) -> raise_type_error s <| sprintf "Cannot apply a runtime forall during the partial evaluation stage."
             | a -> raise_type_error s <| sprintf "Expected a forall.\nGot: %s" (show_data a)
 
         let rec apply s = function
@@ -860,6 +863,7 @@ let peval (env : TopEnv) (x : E) =
                         }
                 s.env_stack_term.[0] <- b
                 term s body
+            | DV(L(_,YForall)), _ -> raise_type_error s "Cannot apply a runtime forall, and not with a term. Foralls have to be known at compile time and applied with a type."
             | DForall _, _ -> raise_type_error s "Cannot apply a forall with a term."
             | DV(L(_,YFun(domain,range,t) & a_ty) & a), b ->
                 let b = dyn false s b
@@ -2497,6 +2501,11 @@ let peval (env : TopEnv) (x : E) =
             match term s h with
             | DHashMap(_, is_writable) -> is_writable := false; DB
             | h -> raise_type_error s $"Expected a compile time HashMap.\nGot: {show_data h}"
+        | EOp(_,HashMapSet,[h;k;v]) ->
+            match term s h, term s k, term s v with
+            | DHashMap(h, is_writable), k, v when is_writable.Value -> h.[k] <- v; DB
+            | DHashMap(h, _), _, _ -> raise_type_error s "The hash map has been made read-only and cannot be added to."
+            | h, _, _ -> raise_type_error s $"Expected a compile time HashMap.\nGot: {show_data h}"
         | EOp(_,HashMapAdd,[h;k;v]) ->
             match term s h, term s k, term s v with
             | DHashMap(h, is_writable), k, v when is_writable.Value -> if h.TryAdd(k,v) then DB else raise_type_error s "The entry with the same key already exists in the dictionary."
@@ -2525,6 +2534,14 @@ let peval (env : TopEnv) (x : E) =
                 | true, v -> v
                 | false, _ -> DSymbol "null"
             | h, _ -> raise_type_error s $"Expected a compile time HashMap.\nGot: {show_data h}"
+        | EOp(_,StaticStringConcat,[l]) ->
+            let strb = System.Text.StringBuilder()
+            let rec loop = function
+                | DPair(a,b) -> loop a; loop b
+                | DLit(LitString x) -> strb.Append(x) |> ignore
+                | x -> raise_type_error s $"Expected a compile time string or a pair of them.\nGot: {show_data x}"
+            loop (term s l)
+            DLit(LitString(strb.ToString()))
         | EOp(_,op,a) -> raise_type_error s <| sprintf "Compiler error: %A with %i args not implemented" op (List.length a)
 
     let s : LangEnv = {

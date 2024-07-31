@@ -638,8 +638,11 @@ let [<EntryPoint>] main args =
     builder.Logging.SetMinimumLevel LogLevel.Warning |> ignore
     builder.Services
         .AddCors()
-        .AddSignalR(fun x -> x.EnableDetailedErrors <- true; x.MaximumReceiveMessageSize <- Nullable ()) |> ignore
-
+        .AddSignalR(fun x -> 
+            x.MaximumReceiveMessageSize <- 1 <<< 20 // 1mb
+            x.EnableDetailedErrors <- true
+            ) |> ignore
+        
     builder.Services
         .AddSingleton<Supervisor>(fun s ->
             let hub = s.GetService<IHubContext<SpiralHub>>()
