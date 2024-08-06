@@ -670,6 +670,9 @@ let peval (env : TopEnv) (x : E) =
                 ) x
         let v = f x
         if dirty then v else x
+    and term_real_nominal s x =
+        let s = {s with seq=ResizeArray(); cse=Dictionary(HashIdentity.Structural) :: s.cse}
+        term s x |> data_to_ty s
     and term_scope'' s x fun_ty =
         let x = term s x |> dyn false s
         let x =
@@ -813,7 +816,7 @@ let peval (env : TopEnv) (x : E) =
                 ty s body
             | a -> raise_type_error s <| sprintf "Expected a record, nominal or a type function. Or a metavar when in typecase.\nGot: %s" (show_ty a)
         | TPrim a -> YPrim a
-        | TTerm(_,a) -> term_scope s a |> snd
+        | TTerm(_,a) -> term_real_nominal s a
         | TMacro(r,a) ->
             let s = add_trace s r
             YMacro(a |> List.map (function TMText a -> Text a | TMType a -> Type(ty s a) | TMLitType a -> TypeLit(ty s a |> assert_ty_lit s)))
@@ -2555,9 +2558,15 @@ let peval (env : TopEnv) (x : E) =
             let rec loop = function
                 | DPair(a,b) -> loop a; loop b
                 | DLit(LitString x) -> strb.Append(x) |> ignore
+                | DB -> ()
                 | x -> raise_type_error s $"Expected a compile time string or a pair of them.\nGot: {show_data x}"
             loop (term s l)
             DLit(LitString(strb.ToString()))
+        | EOp(_,Printf,[fmt;str]) ->
+            let fmt,str = term2 s fmt str
+            match fmt with
+            | DLit(LitString _) -> push_binop_no_rewrite s Printf (fmt, str) YB
+            | _ -> raise_type_error s $"Expected a compile time string as the format.\nGot: {show_data fmt}"
         | EOp(_,op,a) -> raise_type_error s <| sprintf "Compiler error: %A with %i args not implemented" op (List.length a)
 
     let s : LangEnv = {

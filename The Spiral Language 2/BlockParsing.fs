@@ -89,6 +89,7 @@ type Op =
     | StringIndex
     | StringSlice
     | StaticStringConcat
+    | Printf // Cuda specific
 
     // Array
     | ArrayCreate
@@ -807,7 +808,7 @@ let forall d =
         let x = q |> List.map (fun ((r,(a,_)),_) -> r,a) |> duplicates DuplicateForallVar
         match List.append x x' with [] -> Ok q | er -> Error er
         ) d
-let pat_exists d = 
+let pat_exists' d = 
     (skip_keyword SpecExists >>. many (range read_small_type_var) .>> skip_op "." 
     >>= fun q _ -> 
         match duplicates DuplicateExistsVar q with [] -> Ok q | er -> Error er
@@ -1052,12 +1053,12 @@ and pat_array s = (skip_unary_op ";" >>. range (squares (sepBy root_pattern_type
 and pat_list s =
     (range (squares (sepBy root_pattern_type (skip_op ";")))
     |>> fun ((r,_),x) -> let r = r,r in List.foldBack (pat_list_pair r) x (PatUnbox(r,"Nil",PatB r))) s
+and pat_exists s = (range (pat_exists' .>>. root_pattern) |>> fun (r,(l,b)) -> PatExists(r,l,b)) s
 and root_pattern s =
     let body s = 
         let pat_value = (read_value |>> PatValue) <|> (read_default_value PatDefaultValue PatValue)
         let pat_string = read_string |>> (fun (a,x,b) -> PatValue(a +. b,LitString x))
         let pat_symbol = read_symbol |>> PatSymbol
-        let pat_exists = range (pat_exists .>>. root_pattern) |>> fun (r,(l,b)) -> PatExists(r,l,b)
         let (+) = alt (index s)
         (root_pattern_rounds + root_pattern_var_nominal_union + root_pattern_wildcard + root_pattern_dyn + pat_value + pat_string 
         + root_pattern_record + pat_symbol + pat_array + pat_list + pat_exists) s
@@ -1071,7 +1072,7 @@ and root_pattern s =
 and root_pattern_when d = (root_pattern .>>. (opt (skip_keyword SpecWhen >>. root_term)) |>> function a, Some b -> PatWhen(range_of_pattern a +. range_of_expr b,a,b) | a, None -> a) d
 and root_pattern_var d =
     let (+) = alt (index d)
-    (pat_var + root_pattern_wildcard + root_pattern_dyn + root_pattern_rounds + root_pattern_record + pat_array + pat_list) d
+    (pat_var + root_pattern_wildcard + root_pattern_dyn + root_pattern_rounds + root_pattern_record + pat_array + pat_list + pat_exists) d
 and root_pattern_pair d = pat_pair root_pattern_var d
 and root_type_annot d = root_type {root_type_defaults with allow_term=d.is_top_down=false; allow_wildcard=d.is_top_down} d
 and root_type_record (flags : RootTypeFlags) d =
@@ -1119,9 +1120,10 @@ and root_type (flags : RootTypeFlags) d =
                 <|> macro_expression MTypeLit (root_type root_type_defaults |>> fun x -> RawMacroTypeLit(range_of_texpr x,x))) s
             let body = many ((read_text false |>> RawMacroText) <|> read_macro_type_var <|> read_macro_expression)
             pipe3 skip_macro_open body skip_macro_close (fun a l b -> RawTMacro(a +. b, l))
-        let exists = range (exists .>>. root_type {flags with allow_wildcard=false}) |>> fun (r,(l,b)) -> RawTExists(r,l,b) // TODO: Move this next to the foralls.
+        let exists = range (exists .>>. root_type flags) |>> fun (r,(l,b)) -> RawTExists(r,l,b)
+        let foralls = range (forall .>>. root_type flags) |>> (fun (r,(l,b)) -> List.foldBack (fun a b -> RawTForall(range_of_typevar a +. range_of_texpr b,a,b)) l b)
         let (+) = alt (index d)
-        (rounds + lit + lit_default + wildcard + term + metavar + var + record + symbol + macro + exists) d
+        (rounds + lit + lit_default + wildcard + term + metavar + var + record + symbol + macro + exists + foralls) d
 
     let fold_applies a b = List.fold (fun a b -> RawTApply(range_of_texpr a +. range_of_texpr b,a,b)) a b
     let apply_tight d = pipe2 cases (many (expr_tight cases)) fold_applies d
@@ -1129,9 +1131,8 @@ and root_type (flags : RootTypeFlags) d =
     
     let pairs = sepBy1 apply (skip_op "*") |>> List.reduceBack (fun a b -> RawTPair(range_of_texpr a +. range_of_texpr b,a,b))
     let functions = sepBy1 pairs (skip_op "->") |>> List.reduceBack (fun a b -> RawTFun(range_of_texpr a +. range_of_texpr b,a,b,FT_Vanilla))
-    let foralls = pipe2 (opt forall) functions (Option.foldBack (List.foldBack (fun a b -> RawTForall(range_of_typevar a +. range_of_texpr b,a,b))))
     
-    foralls d
+    functions d
 
 and root_term d =
     let rec expressions d =
@@ -1405,9 +1406,14 @@ type [<ReferenceEquality>] TopStatement =
     | TopOpen of VSCRange * (VSCRange * VarString) * (VSCRange * SymbolString) list
 
 let top_inl_or_let_process comments is_top_down = function
-    | (r,PatVar(r',name),(RawForall _ | RawFun _ as body)),false -> Ok(TopInl(comments,r,(r',name),body,is_top_down))
-    | (r,PatVar(r',name),(RawForall _ | RawFun _ as body)),true -> Ok(TopRecInl(comments,r,(r',name),body,is_top_down))
-    | (r,PatVar _,_),_ -> Error [r, ExpectedGlobalFunction]
+    | (r,PatVar(r',name),body),is_rec -> 
+        let rec loop = function
+            | RawAnnot(r,body,t) -> loop body
+            | RawForall _ | RawFun _ ->
+                if is_rec then Ok(TopRecInl(comments,r,(r',name),body,is_top_down))
+                else Ok(TopInl(comments,r,(r',name),body,is_top_down))
+            | _ -> Error [r, ExpectedGlobalFunction]
+        loop body
     | (_,x,_),_ -> Error [range_of_pattern x, ExpectedVarOrOpAsNameOfGlobalStatement]
 let top_inl_or_let d = ((comments .>>. inl_or_let root_term root_pattern_pair root_type_annot) >>= fun (comments,x) d -> top_inl_or_let_process comments d.is_top_down x) d
 
