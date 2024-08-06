@@ -1128,6 +1128,22 @@ let peval (env : TopEnv) (x : E) =
                     let annot = Option.map (ty s) annot
                     dict.[join_point_key] <- (None, annot, jp_name)
                     let seq,ty = term_scope'' s body None
+                    let ty =
+                        match ty with
+                        | YRecord a ->
+                            a
+                            |> Seq.map (fun (KeyValue ((i, k), v)) ->
+                                let i =
+                                    match annot with
+                                    | Some (YRecord a) ->
+                                        a |> Map.tryPick (fun (i', k') _ -> if k = k' then Some i' else None)
+                                    | _ -> None
+                                    |> Option.defaultValue i
+                                (i, k), v
+                            )
+                            |> Map.ofSeq
+                            |> YRecord
+                        | _ -> ty
                     dict.[join_point_key] <- (Some seq, Some ty, jp_name)
                     annot |> Option.iter (fun annot -> if annot <> ty then raise_type_error s <| sprintf "The annotation of the join point does not match its body's type.Got: %s\nExpected: %s" (show_ty ty) (show_ty annot))
                     ty
