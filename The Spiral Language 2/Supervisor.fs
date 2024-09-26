@@ -90,11 +90,11 @@ let file_delete default_env s (files : string []) =
     let modules = Seq.foldBack Map.remove deleted_modules s.modules
     let packages = Seq.foldBack Map.remove deleted_packages s.packages
     let dirty_packages = HashSet(deleted_packages)
-    let revalidate_parent x =
+    let revalidate_parent (x : string) =
+        trace Verbose (fun () -> $"Supervisor.file_delete.revalidate_parent.loop / x.FullName: {x}") _locals
         let rec loop (x : DirectoryInfo) =
             if x <> null then
                 let x' = x.FullName |> SpiralFileSystem.normalize_path
-                trace Verbose (fun () -> $"Supervisor.file_delete.revalidate_parent.loop / x.FullName: {x.FullName} / x': {x'}") _locals
                 let x = DirectoryInfo x'
                 if Map.containsKey x.FullName s.packages then dirty_packages.Add(x.FullName) |> ignore
                 else loop x.Parent
@@ -160,16 +160,16 @@ let attention_server (errors : SupervisorErrorSources) (req : _ Ch) =
             | (mpath,l) :: ls ->
                 let mpath' = mpath |> SpiralFileSystem.normalize_path
                 let uri = Utils.file_uri mpath
-                trace Verbose (fun () -> $"Supervisor.attention_server.loop.loop_package / mpath: {mpath} / mpath': {mpath'} / uri: {uri} / pdir: {pdir}") _locals
-                let mpath = mpath'
+                let pdir' = pdir |> Lib.SpiralFileSystem.normalize_path
+                trace Verbose (fun () -> $"Supervisor.attention_server.loop.loop_package / mpath: {mpath} / mpath': {mpath'} / uri: {uri} / pdir: {pdir} / pdir': {pdir'}") _locals
                 let interrupt x = loop (update {s with packages=push pdir s.packages} x)
                 let rec typer (r : WDiff.TypecheckerStateValue Stream) ers' = r >>= function
                     | Cons((_,x,_),rs) -> body uri interrupt x.errors ers' errors.typer (typer rs)
-                    | Nil -> loop_package s pdir ls
+                    | Nil -> loop_package s pdir' ls
                 let rec bundler (r : BlockBundling.BlockBundleState) ers' = r >>= function
                     | Cons((_,x),rs) -> body uri interrupt x.errors ers' errors.parser (bundler rs)
                     | Nil -> clear_typer uri; typer l []
-                let m = s.supervisor.modules.[mpath]
+                let m = s.supervisor.modules.[mpath']
                 send_tokenizer uri m.tokenizer.errors
                 clear_parse uri
                 bundler m.bundler []
@@ -197,8 +197,9 @@ let attention_server (errors : SupervisorErrorSources) (req : _ Ch) =
                             let rec loop x s =
                                 match x with
                                 | WDiff.File(mid,path,_) ->
-                                    trace Verbose (fun () -> $"Supervisor.attention_server.loop | WDiff.File(mid,path,_) / path: {path}") _locals
-                                    (path, (fst uids_file.[mid]).result) :: s
+                                    let path' = path |> Lib.SpiralFileSystem.normalize_path
+                                    trace Verbose (fun () -> $"Supervisor.attention_server.loop | WDiff.File(mid,path,_) / path: {path} / path': {path'}") _locals
+                                    (path', (fst uids_file.[mid]).result) :: s
                                 | WDiff.Directory(_,_,l) -> list l s
                             and list l s = List.foldBack loop l s
                             list v.files.files.tree []
@@ -476,7 +477,7 @@ let supervisor_server (default_env : Startup.DefaultEnv) atten (errors : Supervi
                                             trace Critical (fun () -> $"Supervisor.supervisor_server.BuildFile.file_build / ex: {ex |> Sm.format_exception}") _locals
                                     }
                                     |> Async.Start
-                                trace Critical (fun () -> $"Supervisor.supervisor_server.BuildFile.file_build / ex: {ex |> Sm.format_exception}") _locals
+                                trace Critical (fun () -> $"Supervisor.supervisor_server.BuildFile.file_build / ex: %A{ex}") _locals
                                 BuildFatalError(ex.Message)
                         | None -> BuildFatalError $"Cannot find `main` in file {Path.GetFileNameWithoutExtension file}."
 

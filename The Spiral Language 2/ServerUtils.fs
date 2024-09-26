@@ -66,8 +66,9 @@ let ss_validate_module (packages : SchemaEnv) (modules : ModuleEnv) (x : SchemaS
             if Map.containsKey path packages then errors.Add(r,"Module directory has a package file in it.")
             list l
         | SpiProj.FileHierarchy.File(_,(r,path),_) ->
-            trace Verbose (fun () -> $"ss_validate_module / file path: {path}") _locals
-            if Map.containsKey path modules = false then errors.Add(r,"Module not loaded.")
+            let path' = path |> Lib.SpiralFileSystem.normalize_path
+            trace Verbose (fun () -> $"ss_validate_module / file / path: {path} / path': {path'}") _locals
+            if Map.containsKey path' modules = false then errors.Add(r,"Module not loaded.")
     and list l = List.iter loop l
     list x.schema.modules
     Seq.toList errors
@@ -164,8 +165,9 @@ let proj_file_from_schema (x : Schema) : ProjFiles =
         | FileHierarchy.File(_,(_,path),name) -> 
             let uid = num_files
             num_files <- num_files + 1
-            trace Verbose (fun () -> $"ServerUtils.proj_file_from_schema / path: {path}") _locals
-            File(uid,path,name)
+            let path' = path |> Lib.SpiralFileSystem.normalize_path
+            trace Verbose (fun () -> $"ServerUtils.proj_file_from_schema / path: {path} / path': {path'}") _locals
+            File(uid,path',name)
         | FileHierarchy.Directory(_,_,name,l) ->
             let uid = num_dirs
             num_dirs <- num_dirs + 1
@@ -298,14 +300,16 @@ let loader_package default_env (packages : SchemaEnv) (modules : ModuleEnv) (pdi
             let rec loop = function
                 | FileHierarchy.Directory(_,_,_,l) -> list l
                 | FileHierarchy.File(_,(_,path),_) ->
-                    trace Verbose (fun () -> $"ServerUtils.loader_package.LoadPackage | FileHierarchy.File(_,(_,path),_) / path: {path}") _locals
-                    load_module modules path
+                    let path' = path |> Lib.SpiralFileSystem.normalize_path
+                    trace Verbose (fun () -> $"ServerUtils.loader_package.LoadPackage | FileHierarchy.File(_,(_,path),_) / path: {path} / path': {path'}") _locals
+                    load_module modules path'
             and list l = List.iter loop l
             list x.schema.modules
         | LoadPackage(pdir,None) -> packages <- Map.remove pdir packages; dirty_packages.Add(pdir) |> ignore; invalidate_parent packages (Directory.GetParent(pdir))
         | LoadModule(mdir,Some x) ->
-            trace Verbose (fun () -> $"ServerUtils.loader_package.LoadModule / mdir: {mdir}") _locals
-            modules <- Map.add mdir x modules
+            let mdir' = mdir |> Lib.SpiralFileSystem.normalize_path
+            trace Verbose (fun () -> $"ServerUtils.loader_package.LoadModule / mdir: {mdir} / mdir': {mdir'}") _locals
+            modules <- Map.add mdir' x modules
         | LoadModule(mdir,None) -> modules <- Map.remove mdir modules
     packages, dirty_packages, modules
 

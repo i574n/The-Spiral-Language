@@ -1064,9 +1064,6 @@ let prepass package_id module_id path (top_env : PrepassTopEnv) =
         | RawTApply(r,a,b) ->
             match f a, f b with
             | TRecord(_,a') & a, TSymbol(_,b') & b ->
-                trace Verbose
-                    (fun () -> $"Prepass.ty' / RawTApply / TRecord | TSymbol")
-                    (fun () -> $"a': %A{a'} / b': %A{b'} / r: %A{r}")
 
                 match a' |> Map.tryPick (fun (_, k) v -> if k = b' then Some v else None) with
                 | Some x -> x

@@ -795,9 +795,6 @@ let peval (env : TopEnv) (x : E) =
             | YRecord a ->
                 match ty s b with
                 | YSymbol b ->
-                    trace Verbose
-                        (fun () -> $"PartEval.peval / TApply / YRecord | YSymbol")
-                        (fun () -> $"a: %A{a |> FSharp.Json.Json.serialize |> SpiralSm.ellipsis_end 200} / b: %A{b} / r: %A{r |> FSharp.Json.Json.serialize |> SpiralSm.ellipsis_end 200}")
                     match a |> Map.tryPick (fun (_, k) v -> if k = b then Some v else None) with
                     | Some x -> x
                     | None -> raise_type_error s <| sprintf  "Cannot find key %s in the record." b
@@ -850,9 +847,6 @@ let peval (env : TopEnv) (x : E) =
             | DNominal(DUnion _,_), _ -> raise_type_error s "Unions cannot be applied."
             | DNominal(a,_), b -> apply s (a,b)
             | DRecord a, DSymbol b ->
-                trace Verbose
-                    (fun () -> $"PartEval.peval / apply / DRecord | DSymbol")
-                    (fun () -> $"a: {a |> FSharp.Json.Json.serialize |> SpiralSm.ellipsis_end 200} / b: %A{b}")
                 match a |> Map.tryPick (fun (_, k) v -> if k = b then Some v else None) with
                 | Some a -> a
                 | None -> raise_type_error s <| sprintf "Cannot find the key %s inside the record." b
@@ -878,9 +872,6 @@ let peval (env : TopEnv) (x : E) =
                 let ret_ty =
                     match ty with
                     | YRecord r ->
-                        trace Verbose
-                            (fun () -> $"PartEval.peval / apply / DV(L(i,YLayout(ty,layout)) as tyv) as a, DSymbol b")
-                            (fun () -> $"a: %A{a |> FSharp.Json.Json.serialize |> SpiralSm.ellipsis_end 200} / b: %A{b}")
                         match r |> Map.tryPick (fun (i, k) v -> if k = b then Some (i,v) else None) with
                         | Some (_i, a) -> a
                         | None -> raise_type_error s <| sprintf "Cannot find the key %s inside the layout type's record." b
@@ -1157,9 +1148,6 @@ let peval (env : TopEnv) (x : E) =
                     | a -> raise_type_error (add_trace s r) <| sprintf "Expected a symbol.\nGot: %s" (show_data a)
                 x |> fold (fun m x ->
                     let sym a b =
-                        trace Verbose
-                            (fun () -> $"PartEval.peval / ERecordWith / sym")
-                            (fun () -> $"a: %A{a} / b: %A{b}")
                         let i =
                             m
                             |> Map.tryPick (fun (i, k) _v -> if k = a then Some i else None)
@@ -1470,9 +1458,6 @@ let peval (env : TopEnv) (x : E) =
                 let rec loop = function
                     | x :: x' ->
                         let sym a b =
-                            trace Verbose
-                                (fun () -> $"PartEval.peval / ERecordTest(r,a,bind,on_succ,on_fail) / DRecord")
-                                (fun () -> $"a: %A{a} / b: %A{b}")
                             match l |> Map.tryPick (fun (_, k) v -> if k = a then Some v else None) with
                             | Some a -> store_term s b a; loop x'
                             | None -> term s on_fail

@@ -1204,9 +1204,6 @@ let infer package_id module_id (top_env' : TopEnv) expr =
     let apply_record r s l x =
         match visit_t x with
         | TySymbol x ->
-            trace Verbose
-                (fun () -> $"Infer.infer / apply_record / TySymbol")
-                (fun () -> $"x: %A{x}")
             match l |> Map.tryPick (fun (_, k) v -> if k = x then Some v else None) with
             | Some x ->
                 let com = match x with TyComment(com,_) -> com | _ -> ""
@@ -1379,12 +1376,7 @@ let infer package_id module_id (top_env' : TopEnv) expr =
                     if x.is_modify then
                         let i, q =
                             match m |> Map.tryPick (fun (i, k) v -> if k = x.symbol then Some (i, v) else None) with
-                            | Some q ->
-                                if x.symbol = "trace_file" then
-                                    trace Verbose
-                                        (fun () -> $"Infer.infer / eval modify")
-                                        (fun () -> $"m.Count: %A{m.Count} / x.symbol: {x.symbol} / q: %A{q}")
-                                q
+                            | Some q -> q
                             | None -> errors.Add(x.range,RecordIndexFailed x.symbol); m.Count, fresh_var scope
                         let w = fresh_var scope
                         unify x.range (TyFun(q,w,FT_Vanilla)) x.var
@@ -1392,9 +1384,6 @@ let infer package_id module_id (top_env' : TopEnv) expr =
                         Map.add (i, x.symbol) w m
                     else
                         f x.var x.body
-                        trace Verbose
-                            (fun () -> $"Infer.infer / eval modify")
-                            (fun () -> $"m.Count: %A{m.Count} / x.symbol: {x.symbol} / q: %A{q}")
                         let i =
                             m
                             |> Map.tryPick (fun (i, k) v -> if k = x.symbol then Some i else None)
@@ -1421,9 +1410,6 @@ let infer package_id module_id (top_env' : TopEnv) expr =
                     | TySymbol k ->
                         match m |> Map.tryPick (fun (i, k') v -> if k' = k then Some (i, v) else None) with
                         | Some (i, m) ->
-                            trace Verbose
-                                (fun () -> $"Infer.infer / tail'")
-                                (fun () -> $"i: %A{i} / k: {k}")
                             match visit_t m with
                             | TyRecord m -> tail' m xs
                             | m -> errors.Add(range_of_expr x, ExpectedRecordAsResultOfIndex m); eval Map.empty
@@ -1446,9 +1432,6 @@ let infer package_id module_id (top_env' : TopEnv) expr =
                             s |> Map.tryPick (fun (i, k') v -> if k' = k then Some (i, v) else None)
                         with
                         | Some (i,m), Some (_i',s) ->
-                            trace Verbose
-                                (fun () -> $"Infer.infer / tail")
-                                (fun () -> $"i: %A{i} / _i': {_i'}")
                             match visit_t m, visit_t s with
                             | TyRecord m, TyRecord s -> i, tail (m,s) xs
                             | TyRecord m, _ -> i, tail' m xs
@@ -1519,9 +1502,6 @@ let infer package_id module_id (top_env' : TopEnv) expr =
                     | TyRecord a ->
                         match b' with
                         | TySymbol b ->
-                            trace Verbose
-                                (fun () -> $"Infer.infer / apply / RawHeapMutableSet(r,a,b,c)")
-                                (fun () -> $"a: %A{a} / b: %A{b}")
                             match a |> Map.tryPick (fun (_, k) v -> if k = b then Some v else None) with
                             | Some x -> r', x
                             | _ -> raise (TypeErrorException [r, RecordIndexFailed b])
