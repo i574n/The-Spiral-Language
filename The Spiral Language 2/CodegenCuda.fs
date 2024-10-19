@@ -194,7 +194,7 @@ let codegen (default_env : Startup.DefaultEnv) (globals : _ ResizeArray, fwd_dcl
                         true
                     | TyLayoutIndexByKey(x,key) -> 
                         match x with 
-                        | L(i,YLayout(_,lay) & a) -> (get_layout_rec lay a).free_vars_by_key.[key] |> layout_index lay i 
+                        | L(i,YLayout(_,lay) & a) -> (get_layout_rec lay a).free_vars_by_key |> Map.pick (fun (_, k') v' -> if key = k' then Some v' else None) |> layout_index lay i 
                         | _ -> raise_codegen_error "Compiler error: Expected the TyV in layout index by key to be a layout type."
                         true
                     | TyMacro a ->
@@ -457,10 +457,10 @@ let codegen (default_env : Startup.DefaultEnv) (globals : _ ResizeArray, fwd_dcl
             | YLayout(_,layout) -> 
                 match layout with
                 | Heap ->
-            let tag = (heap b).tag
+                    let tag = (heap b).tag
                     $"sptr<Heap{tag}>{{new Heap{tag}{{{args' a}}}}}"
                 | HeapMutable ->
-            let tag = (mut b).tag
+                    let tag = (mut b).tag
                     $"sptr<Mut{tag}>{{new Mut{tag}{{{args' a}}}}}"
                 | StackMutable -> raise_codegen_error "The Cuda backend doesn't support stack mutable layout types."
             | _ -> raise_codegen_error "Compiler error: Expected a layout type (2)."
@@ -472,16 +472,16 @@ let codegen (default_env : Startup.DefaultEnv) (globals : _ ResizeArray, fwd_dcl
             | YLayout(_,lay) ->
                 match lay with
                 | HeapMutable -> 
-            let a =
-                List.fold
-                    (fun s k ->
-                        match s with
-                        | DRecord l -> l |> Map.pick (fun (_, k') v' -> if k = k' then Some v' else None)
-                        | _ -> raise_codegen_error "Compiler error: Expected a record.")
-                    (mut t).data b
-            Array.map2 (fun (L(i',_)) b -> $"v{i}.base->v{i'} = {show_w b};") (data_free_vars a) (data_term_vars c)
+                    let a =
+                        List.fold
+                            (fun s k ->
+                                match s with
+                                | DRecord l -> l |> Map.pick (fun (_, k') v' -> if k = k' then Some v' else None)
+                                | _ -> raise_codegen_error "Compiler error: Expected a record.")
+                            (mut t).data b
+                    Array.map2 (fun (L(i',_)) b -> $"v{i}.base->v{i'} = {show_w b};") (data_free_vars a) (data_term_vars c)
                 | StackMutable -> 
-                    let a = List.fold (fun s k -> match s with DRecord l -> l.[k] | _ -> raise_codegen_error "Compiler error: Expected a record.") (stack_mut t).data b
+                    let a = List.fold (fun s k -> match s with DRecord l -> l |> Map.pick (fun (_, k') v' -> if k = k' then Some v' else None) | _ -> raise_codegen_error "Compiler error: Expected a record.") (stack_mut t).data b
                     Array.map2 (fun (L(i',_)) b -> $"v{i}.v{i'} = {show_w b};") (data_free_vars a) (data_term_vars c)
                 | Heap -> raise_codegen_error "Compiler error (1): TyLayoutMutableSet should only be HeapMutable or StackMutable."
             | _ -> raise_codegen_error "Compiler error (2): TyLayoutMutableSet should only be HeapMutable or StackMutable."
