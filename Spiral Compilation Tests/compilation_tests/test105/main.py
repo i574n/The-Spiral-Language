@@ -52,17 +52,8 @@ from dataclasses import dataclass
 from typing import NamedTuple, Union, Callable, Tuple
 i8 = int; i16 = int; i32 = int; i64 = int; u8 = int; u16 = int; u32 = int; u64 = int; f32 = float; f64 = float; char = str; string = str
 
-class Heap0(NamedTuple):
-    v0 : i32
-    v1 : i32
 def main_body():
-    v0 = Heap0(1, 2)
-    v1 = v0.v0
-    v2 = v0.v1
-    del v0
-    v3 = v1 + v2
-    del v1, v2
-    return v3
+    return 
 
 def main():
     r = main_body()

@@ -1,4 +1,4 @@
-﻿module Spiral.Codegen.Fsharp
+module Spiral.Codegen.Fsharp
 
 open Spiral
 open Spiral.Tokenize
@@ -96,12 +96,15 @@ let codegen (env : PartEvalResult) (x : TypedBind []) =
         let dict' = Dictionary(HashIdentity.Structural)
         let dict = Dictionary(HashIdentity.Reference)
         let f x : LayoutRec = 
+            match x with
+            | YLayout(x,_) ->
             let x = env.ty_to_data x
             let a, b =
                 match x with
                 | DRecord a -> let a = Map.map (fun _ -> data_free_vars) a in a |> Map.toArray |> Array.collect snd, a
                 | _ -> data_free_vars x, Map.empty
             {data=x; free_vars=a; free_vars_by_key=b; tag=dict'.Count}
+            | _ -> raise_codegen_error $"Compiler error: Expected a layout type (3).\nGot: %s{show_ty x}"
         fun x ->
             let mutable dirty = false
             let r = Utils.memoize dict (Utils.memoize dict' (fun x -> dirty <- true; f x)) x
@@ -139,8 +142,11 @@ let codegen (env : PartEvalResult) (x : TypedBind []) =
             match a.layout with
             | UHeap -> sprintf "UH%i" (uheap a.cases).tag
             | UStack -> sprintf "US%i" (ustack a.cases).tag
-        | YLayout(a,Heap) -> sprintf "Heap%i" (heap a).tag
-        | YLayout(a,HeapMutable) -> sprintf "Mut%i" (mut a).tag
+        | YLayout(_,lay) as a -> 
+            match lay with
+            | Heap -> sprintf "Heap%i" (heap a).tag
+            | HeapMutable -> sprintf "Mut%i" (mut a).tag
+            | StackMutable -> raise_codegen_error "Compiler error: The F# backend doesn't support stack mutable layout types."
         | YMacro [Text "backend_switch "; Type (YRecord r)] ->
             match r |> Map.tryPick (fun (_, k) v -> if k = backend_name then Some v else None) with
             | Some x -> tup_ty x
@@ -276,21 +282,33 @@ let codegen (env : PartEvalResult) (x : TypedBind []) =
             | UHeap -> sprintf "UH%i_%i%s" (uheap c.cases).tag i vars
             | UStack -> sprintf "US%i_%i%s" (ustack c.cases).tag i vars
             |> simple
-        | TyLayoutToHeap(a,b) -> 
+        | TyToLayout(a,b) -> 
             let a = layout_vars a
-            simple (if a = "" then sprintf "Heap%i()" (heap b).tag else sprintf "{%s} : Heap%i" a (heap b).tag)
-        | TyLayoutToHeapMutable(a,b) ->
-            let a = layout_vars a
-            simple (if a = "" then sprintf "Mut%i()" (mut b).tag else sprintf "{%s} : Mut%i" a (mut b).tag)
-        | TyLayoutIndexAll(x) -> match x with L(i,YLayout(a,lay)) -> (match lay with Heap -> heap a | HeapMutable -> mut a).free_vars |> layout_index i | _ -> failwith "Compiler error: Expected the TyV in layout index to be a layout type."
-        | TyLayoutIndexByKey(x,key) ->
-            match x with
-            | L(i,YLayout(a,lay)) ->
-                (match lay with Heap -> heap a | HeapMutable -> mut a).free_vars_by_key
+            match b with
+            | YLayout(_,layout) -> 
+                match layout with
+                | Heap -> if a = "" then sprintf "Heap%i()" (heap b).tag else sprintf "{%s} : Heap%i" a (heap b).tag
+                | HeapMutable -> if a = "" then sprintf "Mut%i()" (mut b).tag else sprintf "{%s} : Mut%i" a (mut b).tag
+                | StackMutable -> raise_codegen_error "The F# backend doesn't support stack mutable layout types."
+            | _ -> raise_codegen_error $"Compiler error: Expected a layout type (4).\nGot: %s{show_ty b}"
+            |> simple
+        | TyLayoutIndexAll(L(i,YLayout(_,lay) & a)) -> 
+            match lay with
+            | Heap -> heap a 
+            | HeapMutable -> mut a 
+            | StackMutable -> raise_codegen_error "The F# backend doesn't support indexing into stack mutable layout types."
+            |> fun x -> x.free_vars |> layout_index i
+        | TyLayoutIndexByKey(L(i,YLayout(_,lay) & a),key) -> 
+            match lay with
+            | Heap -> heap a
+            | HeapMutable -> mut a 
+            | StackMutable -> raise_codegen_error "The F# backend doesn't support indexing into stack mutable layout types."
+            |> fun x ->
+                x.free_vars_by_key
                 |> Map.tryPick (fun (_, k) v -> if k = key then Some v else None)
-                |> Option.iter (fun v -> layout_index i v)
-            | _ -> failwith "Compiler error: Expected the TyV in layout index by key to be a layout type."
-        | TyLayoutHeapMutableSet(L(i,t),b,c) ->
+                |> Option.iter (layout_index i)
+        | TyLayoutIndexAll _ | TyLayoutIndexByKey _ -> raise_codegen_error "Compiler error: Expected the TyV in layout index to be a layout type."
+        | TyLayoutMutableSet(L(i,t),b,c) ->
             let a = List.fold (fun s k ->
                 match s with
                 | DRecord l -> l |> Map.pick (fun (_,k') v -> if k' = k then Some v else None)
@@ -362,7 +380,7 @@ let codegen (env : PartEvalResult) (x : TypedBind []) =
             | Sqrt, [x] -> sprintf "sqrt %s" (tup x)
             | Sin, [x] -> sprintf "sin %s" (tup x)
             | Cos, [x] -> sprintf "cos %s" (tup x)
-            | NanIs, [x] ->
+            | NanIs, [x] -> 
                 match x with
                 | DLit(LitFloat32 _) | DV(L(_,YPrim Float32T)) -> sprintf "System.Single.IsNaN(%s)" (tup x)
                 | DLit(LitFloat64 _) | DV(L(_,YPrim Float64T)) -> sprintf "System.Double.IsNaN(%s)" (tup x)

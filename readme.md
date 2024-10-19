@@ -29,7 +29,7 @@
             - [Records](#records)
             - [Unions](#unions)
         - [Type Literals](#type-literals)
-            - [\v operator in macros](#%5Cv-operator-in-macros)
+            - [v operator in macros](#v-operator-in-macros)
         - [Prototypes](#prototypes)
         - [Existentials](#existentials)
         - [GADTs](#gadts)
@@ -44,6 +44,11 @@
             - [Print Static](#print-static)
         - [Type Inference In Bottom-Up Style](#type-inference-in-bottom-up-style)
         - [Real Nominals And Inverse Arrays](#real-nominals-and-inverse-arrays)
+    - [Special behaviors in the Cuda backend](#special-behaviors-in-the-cuda-backend)
+        - [noinline_ prefix in named join points](#noinline_-prefix-in-named-join-points)
+        - [v variables in macros](#v-variables-in-macros)
+        - [Layout type indexing returns references](#layout-type-indexing-returns-references)
+        - [Stack mutable layout types](#stack-mutable-layout-types)
     - [Known Bugs](#known-bugs)
 
 <!-- /TOC -->
@@ -1290,7 +1295,7 @@ typecase 16 * (f32 * i32) with
 
 You can't do meaninful computation with them in the top down segment and they are intended to be used in the real segment instead. The top down segment's intent is to help you propagate them, and not much else.
 
-#### `\v` operator in macros
+#### `v` operator in macros
 
 In the C/C++ backends, `\v` can be used to declare arrays without needing to return them.
 
@@ -2706,6 +2711,221 @@ v6
 ```
 
 F# has value structs so maybe this functionality on its own is not a big deal. It certainly has been advantageous in the old Cython backend which allocated composite types on the heap, but in the old Spiral what I've particularly found this functionality useful for is getting arrays past language boundaries. Different languages, F# and C for example, have structs of different sizes and it is hard to keep them straight. Primitive types on the other hand are much easier to pass around.
+
+## Special behaviors in the Cuda backend
+
+Note: the following examples need the [Spiral ML library](https://github.com/mrakgr/Spiral-s-ML-Library). The project has a new core library intended for Cuda programming.
+
+### `noinline_` prefix in named join points
+
+```spiral
+open corebase
+open corecuda
+open coreext
+
+inl main() =
+    run fun () =>
+        let qwe() : () = $'printf("hello\\n")'
+        qwe()
+```
+
+```cpp
+__device__ void qwe_0();
+__device__ void qwe_0(){
+    printf("hello\n");
+    return ;
+}
+extern "C" __global__ void entry0() {
+    return qwe_0();
+}
+```
+
+This is how it normally compiles in the Python + Cuda backend, but suppose we changed the name a little?
+
+```spiral
+open corebase
+open corecuda
+open coreext
+
+inl main() =
+    run fun () =>
+        let noinline_qwe() : () = $'printf("hello\\n")'
+        noinline_qwe()
+```
+```cpp
+__device__ void noinline_qwe_0();
+__device__ __noinline__ void noinline_qwe_0(){
+    printf("hello\n");
+    return ;
+}
+extern "C" __global__ void entry0() {
+    return noinline_qwe_0();
+}
+```
+
+As you can see, named join points that are prefixed with **noinline** get the `__noinline__` annotation in generated code.
+
+Why is this useful?
+
+```spiral
+open corebase
+open corecuda
+open coreext
+
+inl main() =
+    run fun () =>
+        let noinline_qwe() : () = 
+            __syncthreads()
+            $'printf("hello\\n")'
+        if thread_index() < 15 then
+            $'printf("true\\n")'
+            noinline_qwe()
+        else
+            $'printf("false\\n")'
+            noinline_qwe()
+```
+```cpp
+__device__ void noinline_qwe_0();
+__device__ __noinline__ void noinline_qwe_0(){
+    __syncthreads();
+    printf("hello\n");
+    return ;
+}
+extern "C" __global__ void entry0() {
+    int v0;
+    v0 = threadIdx.x;
+    bool v1;
+    v1 = v0 < 15l;
+    if (v1){
+        printf("true\n");
+        return noinline_qwe_0();
+    } else {
+        printf("false\n");
+        return noinline_qwe_0();
+    }
+}
+```
+
+If the function was not marked with `__noinline__`, once we run this the kernel would have ended up handing. Thread synchronization using `__syncthreads` requires all the threads in the block to execute the same instruction. Without the `__noinline__` the compiler would have inlined that small function and the kernel would have gotten stuck.
+
+On other words, `__noinline__` allows the divergent threads in the kernel to reconverge on a function call.
+
+### `v` variables in macros
+
+```spiral
+inl main() =
+    run fun () =>
+        inl x : array int = $"`int \v[5];"
+        ()
+```
+
+```cpp
+extern "C" __global__ void entry0() {
+    int v0[5];;
+    return ;
+}
+```
+
+As [documented previously](#v-operator-in-macros), it is often useful to be able to declare local arrays in Cuda code, and the `\v` string can be used in the macro for that purpose. Also, as newer versions of Spiral support macro expressions, you can pass complex types into the macro directly without needing to bind them in a typecase first.
+
+```spiral
+inl main() =
+    run fun () =>
+        inl x : array (int * float) = $"`(int * float) \v[5];"
+        ()
+```
+```cpp
+struct Tuple0;
+struct Tuple0 {
+    int v0;
+    float v1;
+    __device__ Tuple0() = default;
+    __device__ Tuple0(int t0, float t1) : v0(t0), v1(t1) {}
+};
+extern "C" __global__ void entry0() {
+    Tuple0 v0[5];;
+    return ;
+}
+```
+
+This behavior is safe. If you tried doing something like...
+
+```
+inl main() =
+    run fun () =>
+        inl x : (int * float) = $"`(int * float) \v"
+        ()
+```
+```
+Error trace on line: 8, column: 13 in module: c:\Spiral_s_ML_Library\tests\test14.spi.
+    run fun () =>
+            ^
+Error trace on line: 9, column: 9 in module: c:\Spiral_s_ML_Library\tests\test14.spi.
+        inl x : (int * float) = $"`(int * float) \v"
+        ^
+Error trace on line: 9, column: 33 in module: c:\Spiral_s_ML_Library\tests\test14.spi.
+        inl x : (int * float) = $"`(int * float) \v"
+                                ^
+The special \v macro requires the same number of free vars in its binding as there are \v in the code.
+```
+
+The Cuda codegenerator makes sure that the right amount of free vars are in the macro as they are in the generated code.
+
+### Layout type indexing returns references
+
+```spiral
+inl main() =
+    run fun () =>
+        inl x : heap (int * int * int) = heap (1,2,3)
+        inl a,b,c = !x
+        ()
+```
+```cpp
+struct Heap0;
+struct Heap0 {
+    int refc{0};
+    int v0;
+    int v1;
+    int v2;
+    __device__ Heap0() = default;
+    __device__ Heap0(int t0, int t1, int t2) : v0(t0), v1(t1), v2(t2) {}
+};
+extern "C" __global__ void entry0() {
+    sptr<Heap0> v0;
+    v0 = sptr<Heap0>{new Heap0{1l, 2l, 3l}};
+    int & v1 = v0.base->v0; int & v2 = v0.base->v1; int & v3 = v0.base->v2;
+    return ;
+}
+```
+
+As layout types in the Cuda backend would be pretty useless without this capability, it has been implemented in Spiral v2.15.0. It's necessary keep in mind that when indexing into layout types that references, and not value types will be generated in the resulting output. And trying to mutate the values on the stack will end up mutating them in the layout type itself even if they are intended to be immutable `heap` types.
+
+### Stack mutable layout types
+
+As of v2.15.0, a new layout type has been added to the language.
+
+```spiral
+inl main() : () =
+    inl _ = join_backend Cuda
+        inl x = stack_mut {x = true; y = 1i32}
+        inl _ = x.x, x.y
+        x.x <- false
+    ()
+```
+
+```cpp
+extern "C" __global__ void entry0() {
+    StackMut0 v0{true, 1};
+    bool & v1 = v0.v0;
+    int & v2 = v0.v1;
+    v0.v0 = false;
+    return ;
+}
+```
+
+On the stack they are constructed as value types, but in functions they are passed by reference. Since they are C++ reference types, they cannot be returned from join points and conditionals.
+
+The purpose of them is to match the forward passing semantics of heap mutable types, and easily swap between the two to see if allocating on the heap or the stack is better. Much like for the other layout types, indexing into them returns references.
 
 ## Known Bugs
 

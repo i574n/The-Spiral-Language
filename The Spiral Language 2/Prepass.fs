@@ -60,7 +60,7 @@ and [<ReferenceEquality>] E =
     | EIfThen of Range * E * E
     | EPair of Range * E * E
     | ESeq of Range * E * E
-    | EHeapMutableSet of Range * E * (Range * E) list * E
+    | EMutableSet of Range * E * (Range * E) list * E
     | EReal of Range * E
     | EExists of Range * T list * E
     | EMacro of Range * Macro list * T
@@ -265,7 +265,7 @@ module Printable =
             | E.EIfThen(_,a,b) -> EIfThen(term a,term b)
             | E.EPair(_,a,b) -> EPair(term a,term b)
             | E.ESeq(_,a,b) -> ESeq(term a,term b)
-            | E.EHeapMutableSet(_,a,b,c) -> EHeapMutableSet(term a,List.map (snd >> term) b,term c)
+            | E.EMutableSet(_,a,b,c) -> EHeapMutableSet(term a,List.map (snd >> term) b,term c)
             | E.EReal(_, a) -> EReal(term a)
             | E.EExists(_, a, b) -> EExists(List.map ty a, term b)
             | E.EMacro(_,a,b) ->
@@ -442,7 +442,7 @@ let propagate x =
                 | WVar(_,a) -> s + term a
                 ) c
         | EOp(_,_,a) -> List.fold (fun s a -> s + term a) empty a
-        | EHeapMutableSet(_,a,b,c) -> term a + List.fold (fun s (_,a) -> s + term a) empty b + term c
+        | EMutableSet(_,a,b,c) -> term a + List.fold (fun s (_,a) -> s + term a) empty b + term c
         | EIfThenElse(_,a,b,c) -> term a + term b + term c
         | EExists(_,a,b) -> List.fold (fun s a -> s + ty a) (term b) a
         | EPatternMiss a | EReal(_,a) -> term a
@@ -568,7 +568,7 @@ let resolve (scope : Dictionary<obj,PropagatedVars>) x =
         | EExistsTest(_,_,_,_,a,b)
         | EUnitTest(_,_,a,b) | ESymbolTest(_,_,_,a,b) | EPairTest(_,_,_,_,a,b) | ELitTest(_,_,_,a,b)
         | ELet(_,_,a,b) | EIfThen(_,a,b) | EPair(_,a,b) | ESeq(_,a,b) | EApply(_,a,b) -> f a; f b
-        | EHeapMutableSet(_,a,b,c) -> f a; List.iter (snd >> f) b; f c
+        | EMutableSet(_,a,b,c) -> f a; List.iter (snd >> f) b; f c
         | EUnbox(_,_,_,a,b,c) | EIfThenElse(_,a,b,c) -> f a; f b; f c
         | EMacro(_,a,b) ->
             a |> List.iter (function MLitType a | MType a -> ty env a | MTerm a -> f a | MText _ -> ())
@@ -706,7 +706,7 @@ let lower (scope : Dictionary<obj,PropagatedVars>) x =
         | EArray(r,a,b) -> EArray(r,List.map f a, g env b)
         | EPair(r,a,b) -> EPair(r,f a,f b)
         | ESeq(r,a,b) -> ESeq(r,f a,f b)
-        | EHeapMutableSet(r,a,b,c) -> EHeapMutableSet(r,f a,List.map (fun (a,b) -> a, f b) b,f c)
+        | EMutableSet(r,a,b,c) -> EMutableSet(r,f a,List.map (fun (a,b) -> a, f b) b,f c)
         | EPatternMiss a -> EPatternMiss(f a)
         | EReal(r,a) -> EReal(r,f a)
         | EExists(r,a,b) -> EExists(r,List.map (g env) a,f b)
@@ -890,8 +890,10 @@ let prepass package_id module_id path (top_env : PrepassTopEnv) =
     
     // The functions in this block are basically renaming string id to int ids, in addition to pattern compilation.
     let rec compile_pattern (id : Id) (env : Env) (clauses : (Pattern * RawExpr) list) =
-        let mutable var_count = env.term.i
-        let patvar () = let x = var_count in var_count <- var_count+1; x
+        let mutable term_var_count = env.term.i
+        let mutable ty_var_count = env.ty.i
+        let patvar () = let x = term_var_count in term_var_count <- term_var_count+1; x
+        let ty_patvar () = let x = ty_var_count in ty_var_count <- ty_var_count+1; x
         let loop (pat, on_succ) on_fail =
             let mutable dict = Map.empty
             let mutable dict_type = Map.empty
@@ -912,7 +914,7 @@ let prepass package_id module_id path (top_env : PrepassTopEnv) =
                 let tv x =
                     match Map.tryFind x dict_type with
                     | Some x -> x
-                    | None -> let v = patvar() in dict_type <- Map.add x v dict_type; v
+                    | None -> let v = ty_patvar() in dict_type <- Map.add x v dict_type; v
                 let step pat on_succ =
                     match pat with
                     | PatVar(_,x) -> v x, on_succ
@@ -979,8 +981,8 @@ let prepass package_id module_id path (top_env : PrepassTopEnv) =
         l |> List.iter (fun (terms,tys) -> // The reason I am not evaling it in place is because of the var count which is mutable. I need to deal with the patterns first before replacing the strings in the body.
             let env (dict,dict_type) = 
                 {env with 
-                    term = {|env.term with i=var_count; env=dict |> Map.fold (fun s k v -> Map.add k (EV v) s) env.term.env|} 
-                    ty = {|env.ty with i=var_count; env=dict_type |> Map.fold (fun s k v -> Map.add k (TV v) s) env.ty.env|} 
+                    term = {|env.term with i=term_var_count; env=dict |> Map.fold (fun s k v -> Map.add k (EV v) s) env.term.env|} 
+                    ty = {|env.ty with i=ty_var_count; env=dict_type |> Map.fold (fun s k v -> Map.add k (TV v) s) env.ty.env|} 
                     }
             terms |> Seq.iter (fun (a,dict,b) -> b := term (env dict) a)
             tys |> Seq.iter (fun (a,dict,b) -> b := ty (env dict) a)
@@ -1086,6 +1088,7 @@ let prepass package_id module_id path (top_env : PrepassTopEnv) =
         match x with
         | RawDefaultLit(r,a) -> failwith "Compiler error: Default values should have been annotated in `fill` by prepass time."
         | RawAnnot(_,RawDefaultLit(r,a),b) -> EDefaultLit(p r,a,ty env b)
+        | RawAnnot(_,RawLit(r,a),b) -> EDefaultLit(p r,a.LitToString(),ty env b)
         | RawB r -> EB(p r)
         | RawV(r,a,_) -> v_term env a
         | RawLit(r,a) -> ELit(p r,a)
@@ -1148,7 +1151,7 @@ let prepass package_id module_id path (top_env : PrepassTopEnv) =
         | RawIfThen(r,a,b) -> EIfThen(p r,f a,f b)
         | RawPair(r,a,b) -> EPair(p r,f a,f b)
         | RawSeq(r,a,b) -> ESeq(p r,f a,f b)
-        | RawHeapMutableSet(r,a,b,c) -> EHeapMutableSet(p r,f a,List.map (fun a -> p (range_of_expr a), f a) b,f c)
+        | RawHeapMutableSet(r,a,b,c) -> EMutableSet(p r,f a,List.map (fun a -> p (range_of_expr a), f a) b,f c)
         | RawReal(r,a) -> f a
         | RawExists(r,(_,Some a),b) -> EExists(p r, List.map (ty env) a, f b)
         | RawExists(_,(_,None),_) -> failwith "Compiler error: The exists' vars should have been added during `fill`."

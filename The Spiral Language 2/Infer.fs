@@ -73,6 +73,7 @@ type TypeError =
     | UnboundVariable of string
     | UnboundModule
     | ModuleIndexFailedInOpen
+    | ModuleIndexWouldShadowLocalVars of string []
     | TermError of T * T
     | TypeVarScopeError of string * T * T
     | RecursiveMetavarsNotAllowed of T * T
@@ -89,6 +90,8 @@ type TypeError =
     | UnionsCannotBeApplied
     | ExpectedNominalInApply of T
     | MalformedNominal
+    | LayoutSetMustBeAnnotated
+    | ExpectedMutableLayout of T
     | ExpectedRecordAsResultOfIndex of T
     | RecordIndexFailed of string
     | ModuleIndexFailed of string
@@ -342,7 +345,7 @@ type HoverTypes() =
     member _.AddHover(r,(x,com)) = hover_types.Add(r,((if has_substituted_tvars x then term_subst x else x), com))
     member _.ToArray() = hover_types.ToArray()
 
-let module_open (hover_types : HoverTypes option) (top_env : Env) (r : VSCRange) b l =
+let module_open (hover_types : HoverTypes option) (top_env : Env) (local_env_ty : Map<string,T>) (r : VSCRange) b l =
     let tryFind env x =
         match Map.tryFind x env.term, Map.tryFind x env.ty, Map.tryFind x env.constraints with
         | Some (TyModule a), Some (TyModule b), Some (M c) -> ValueSome {term=a; ty=b; constraints=c}
@@ -359,7 +362,13 @@ let module_open (hover_types : HoverTypes option) (top_env : Env) (r : VSCRange)
                     loop env x'
                 | _ -> Error(r, ModuleIndexFailedInOpen)
             | [] -> Ok env
-        loop env l
+        loop env l |> Result.bind (fun env ->
+            let h = ResizeArray()
+            local_env_ty |> Map.iter (fun k _ -> if env.ty.ContainsKey k then h.Add k)
+            if h.Count > 0 then Error(r, ModuleIndexWouldShadowLocalVars(h.ToArray()))
+            else Ok env
+            )
+
 
 let validate_bound_vars (top_env : Env) constraints term ty x =
     let errors = ResizeArray()
@@ -405,7 +414,7 @@ let validate_bound_vars (top_env : Env) constraints term ty x =
                 cterm constraints (term, ty + metavars a) b
                 ) b
         | RawOpen(_,(a,b),l,on_succ) ->
-            match module_open None top_env a b l with
+            match module_open None top_env Map.empty a b l with
             | Ok x ->
                 let combine e m = Map.fold (fun s k _ -> Set.add k s) e m
                 cterm (Map.foldBack Map.add x.constraints constraints) (combine term x.term, combine ty x.ty) on_succ
@@ -541,7 +550,7 @@ let show_kind x =
 
 let show_constraints env x = Set.toList x |> List.map (constraint_name env) |> String.concat "; " |> sprintf "{%s}"
 let show_nominal (env : TopEnv) i = match Map.tryFind i env.nominals_aux with Some x -> x.name | None -> "?"
-let show_layout_type = function Heap -> "heap" | HeapMutable -> "mut"
+let show_layout_type = function Heap -> "heap" | HeapMutable -> "mut" | StackMutable -> "stack_mut"
 
 let show_t (env : TopEnv) x =
     let show_var (a : Var) =
@@ -630,9 +639,13 @@ let show_type_error (env : TopEnv) x =
     | UnboundVariable x -> sprintf "Unbound variable: %s." x
     | UnboundModule -> sprintf "Unbound module."
     | ModuleIndexFailedInOpen -> sprintf "Module does not have a submodule with that key."
+    | ModuleIndexWouldShadowLocalVars [|v|] -> $"The module open would shadow a local variable: {v}."
+    | ModuleIndexWouldShadowLocalVars vars -> let v = String.concat ", " vars in $"The module open would shadow the local variables: {v}."
     | TypeVarScopeError(a,_,_) -> sprintf "Tried to unify the type variable %s with a metavar outside its scope." a
     | ForallVarConstraintError(n,a,b) -> sprintf "Metavariable's constraints must be a subset of the forall var %s's.\nGot: %s\nExpected: %s" n (show_constraints env a) (show_constraints env b)
     | MetavarsNotAllowedInRecordWith -> sprintf "In the top-down segment the record keys need to be fully known. Please add an annotation."
+    | LayoutSetMustBeAnnotated -> sprintf "The layout type being set must be annotated."
+    | ExpectedMutableLayout a -> sprintf "Expected a mutable layout type.\nGot: %s" (f a)
     | ExpectedRecord a -> sprintf "Expected a record.\nGot: %s" (f a)
     | ExpectedRecordInsideALayout a -> sprintf "Expected a record inside a layout type.\nGot: %s" (f a)
     | ExpectedRecordAsResultOfIndex a -> sprintf "Expected a record as result of index.\nGot: %s" (f a)
@@ -1018,8 +1031,7 @@ let infer package_id module_id (top_env' : TopEnv) expr =
             | TyForall(v,a) -> (h.Add >> ignore) v; f a
             | TyComment(_,a) | TyLayout(a,_) | TyArray a -> f a
             | TyMacro a -> List.iter (function TMLitVar a | TMVar a -> f a | TMText _ -> ()) a
-            | TyModule _ -> ()
-            | TyInl(_,a) -> errors.Add(r,CompilerError "Compiler error: Not expecting a TyInl in generalize.")
+            | TyModule _ | TyInl _ -> ()
 
         let f x s = TyForall(x,s)
         replace_metavars body
@@ -1338,7 +1350,7 @@ let infer package_id module_id (top_env' : TopEnv) expr =
             loop (f'' a')
         | RawAnnot(r,a,b) ->  ty_init scope env s b; f s a
         | RawOpen(_,(r,a),l,on_succ) ->
-            match module_open (Some hover_types) (loc_env top_env) r a l with
+            match module_open (Some hover_types) (loc_env top_env) env.ty r a l with
             | Ok x ->
                 let combine big small = Map.foldBack Map.add small big
                 term scope {term = combine env.term x.term; ty = combine env.ty x.ty; constraints = combine env.constraints x.constraints} s on_succ
@@ -1494,20 +1506,27 @@ let infer package_id module_id (top_env' : TopEnv) expr =
             unify r s TyB
             try let v = fresh_var scope
                 let i = errors.Count
-                f (TyLayout(v,HeapMutable)) a
-                if i <> errors.Count then raise (TypeErrorException [])
-                let b = List.map (fun x -> range_of_expr x, f' x) b
-                List.fold (fun (r,a') (r',b') ->
-                    match visit_t a' with
-                    | TyRecord a ->
-                        match b' with
-                        | TySymbol b ->
-                            match a |> Map.tryPick (fun (_, k) v -> if k = b then Some v else None) with
-                            | Some x -> r', x
-                            | _ -> raise (TypeErrorException [r, RecordIndexFailed b])
-                        | b -> raise (TypeErrorException [r', ExpectedSymbol' b])
-                    | a -> raise (TypeErrorException [r, ExpectedRecord a])
-                    ) (range_of_expr a, v) b |> snd
+                f v a
+                match visit_t v with
+                | TyMetavar _ -> raise (TypeErrorException [r, LayoutSetMustBeAnnotated])
+                | TyLayout(v,lay) ->
+                    match lay with
+                    | HeapMutable | StackMutable ->
+                        if i <> errors.Count then raise (TypeErrorException [])
+                        let b = List.map (fun x -> range_of_expr x, f' x) b
+                        List.fold (fun (r,a') (r',b') ->
+                            match visit_t a' with
+                            | TyRecord a ->
+                                match b' with
+                                | TySymbol b ->
+                                    match a |> Map.tryPick (fun (_, k) v -> if k = b then Some v else None) with
+                                    | Some x -> r', x
+                                    | _ -> raise (TypeErrorException [r, RecordIndexFailed b])
+                                | b -> raise (TypeErrorException [r', ExpectedSymbol' b])
+                            | a -> raise (TypeErrorException [r, ExpectedRecord a])
+                            ) (range_of_expr a, v) b |> snd
+                    | Heap -> raise (TypeErrorException [r, ExpectedMutableLayout v])
+                | v -> raise (TypeErrorException [r, ExpectedMutableLayout v])
             with :? TypeErrorException as e -> errors.AddRange e.Data0; fresh_var scope
             |> fun v -> f v c
         | RawArray(r,a) ->
@@ -2025,7 +2044,7 @@ let infer package_id module_id (top_env' : TopEnv) expr =
         | Some(C x) -> errors.Add(fst prot, ExpectedPrototypeConstraint x); check_ins fake
         | Some(M _) -> errors.Add(fst prot, ExpectedPrototypeInsteadOfModule); check_ins fake
     | BundleOpen(q,(r,a),b) ->
-        match module_open (Some hover_types) (loc_env top_env) r a b with
+        match module_open (Some hover_types) (loc_env top_env) Map.empty r a b with
         | Ok x -> psucc (fun () -> FOpen(q,(r,a),b)), AOpen {top_env_empty with term=x.term; ty=x.ty; constraints=x.constraints}
         | Error er -> errors.Add(er); pfail, AOpen top_env_empty
     |> fun (filled_top, top_env_additions) ->
@@ -2060,6 +2079,7 @@ let base_types (default_env : Startup.DefaultEnv) =
     "array_base", inl (fun x -> TyArray(tyvar x))
     "heap", inl (fun x -> TyLayout(tyvar x,Layout.Heap))
     "mut", inl (fun x -> TyLayout(tyvar x,Layout.HeapMutable))
+    "stack_mut", inl (fun x -> TyLayout(tyvar x,Layout.StackMutable))
     "fptr", inl2 (fun x y -> TyFun(tyvar x,tyvar y,FT_Pointer))
     "closure", inl2 (fun x y -> TyFun(tyvar x,tyvar y,FT_Closure))
     "int", TyPrim default_env.default_int

@@ -419,7 +419,7 @@ let supervisor_server (default_env : Startup.DefaultEnv) atten (errors : Supervi
             let backend = x.backend
             let file = file x.uri
             let _locals () = $"file: {file}"
-            trace Debug (fun () -> $"Supervisor.supervisor_server.BuildFile") _locals
+            trace Verbose (fun () -> $"Supervisor.supervisor_server.BuildFile") _locals
             let handle_build_result = function
                 | BuildOk l ->
                     Job.fromUnitTask (fun () -> task {

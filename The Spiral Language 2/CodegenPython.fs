@@ -1,4 +1,4 @@
-﻿module Spiral.Codegen.Python
+module Spiral.Codegen.Python
 
 open Spiral
 open Spiral.Tokenize
@@ -132,12 +132,15 @@ let codegen' backend_handler (env : PartEvalResult) (x : TypedBind []) =
         let dict' = Dictionary(HashIdentity.Structural)
         let dict = Dictionary(HashIdentity.Reference)
         let f x : LayoutRec = 
+            match x with
+            | YLayout(x,_) ->
             let x = env.ty_to_data x
             let a, b =
                 match x with
                 | DRecord a -> let a = Map.map (fun _ -> data_free_vars) a in a |> Map.toArray |> Array.collect snd, a
                 | _ -> data_free_vars x, Map.empty
             {data=x; free_vars=a; free_vars_by_key=b; tag=dict'.Count}
+            | _ -> raise_codegen_error $"Compiler error: Expected a layout type (5).\nGot: %s{show_ty x}"
         fun x ->
             let mutable dirty = false
             let r = Utils.memoize dict (Utils.memoize dict' (fun x -> dirty <- true; f x)) x
@@ -195,8 +198,11 @@ let codegen' backend_handler (env : PartEvalResult) (x : TypedBind []) =
             match a.Item.layout with
             | UHeap -> sprintf "UH%i" (uheap a).tag
             | UStack -> sprintf "US%i" (ustack a).tag
-        | YLayout(a,Heap) -> sprintf "Heap%i" (heap a).tag
-        | YLayout(a,HeapMutable) -> sprintf "Mut%i" (mut a).tag
+        | YLayout(_,lay) as a -> 
+            match lay with
+            | Heap -> sprintf "Heap%i" (heap a).tag
+            | HeapMutable -> sprintf "Mut%i" (mut a).tag
+            | StackMutable -> raise_codegen_error "Compiler error: The Python backend doesn't support stack mutable layout types."
         | YMacro [Text "backend_switch "; Type (YRecord r)] ->
             match r |> Map.tryPick (fun (_, k) v -> if k = backend_name then Some v else None) with
             | Some x -> tup_ty x
@@ -209,7 +215,7 @@ let codegen' backend_handler (env : PartEvalResult) (x : TypedBind []) =
             $"Callable[[{a}], {tup_ty b}]"
         | YExists -> raise_codegen_error "Existentials are not supported at runtime. They are a compile time feature only."
         | YForall -> raise_codegen_error "Foralls are not supported at runtime. They are a compile time feature only."
-        | a -> failwithf "Complier error: Type not supported in the codegen.\nGot: %A" a
+        | a -> raise_codegen_error $"Complier error: Type not supported in the codegen.\nGot: %A{a}"
     and tup_ty x =
         match env.ty_to_data x |> data_free_vars |> Array.map (fun (L(_,t)) -> tyv t) with
         | [||] -> "None"
@@ -285,17 +291,32 @@ let codegen' backend_handler (env : PartEvalResult) (x : TypedBind []) =
             | UHeap -> sprintf "UH%i_%i(%s)" (uheap c').tag i vars
             | UStack -> sprintf "US%i_%i(%s)" (ustack c').tag i vars
             |> return'
-        | TyLayoutToHeap(a,b) -> sprintf "Heap%i(%s)" (heap b).tag (tup_data' a) |> return'
-        | TyLayoutToHeapMutable(a,b) -> sprintf "Mut%i(%s)" (mut b).tag (tup_data' a) |> return'
-        | TyLayoutIndexAll(x) -> match x with L(i,YLayout(a,lay)) -> (match lay with Heap -> heap a | HeapMutable -> mut a).free_vars |> layout_index i | _ -> failwith "Compiler error: Expected the TyV in layout index to be a layout type."
-        | TyLayoutIndexByKey(x,key) ->
-            match x with
-            | L(i,YLayout(a,lay)) ->
-                (match lay with Heap -> heap a | HeapMutable -> mut a).free_vars_by_key
+        | TyToLayout(a,b) -> 
+            match b with
+            | YLayout(_,layout) -> 
+                match layout with
+                | Heap -> sprintf "Heap%i(%s)" (heap b).tag (tup_data' a)
+                | HeapMutable -> sprintf "Mut%i(%s)" (mut b).tag (tup_data' a)
+                | StackMutable -> raise_codegen_error "The Python backend doesn't support stack mutable layout types."
+            | _ -> raise_codegen_error "Compiler error: Expected a layout type (6)."
+            |> return'
+        | TyLayoutIndexAll(L(i,YLayout(_,lay) & a)) -> 
+            match lay with
+            | Heap -> heap a 
+            | HeapMutable -> mut a
+            | StackMutable -> raise_codegen_error "The Python backend doesn't support indexing into stack mutable layout types."
+            |> fun x -> x.free_vars |> layout_index i
+        | TyLayoutIndexByKey(L(i,YLayout(_,lay) & a),key) ->
+            match lay with
+            | Heap -> heap a 
+            | HeapMutable -> mut a
+            | StackMutable -> raise_codegen_error "The Python backend doesn't support indexing into stack mutable layout types."
+            |> fun x ->
+                x.free_vars_by_key
                 |> Map.tryPick (fun (_, k) v -> if k = key then Some v else None)
                 |> Option.iter (layout_index i)
-            | _ -> failwith "Compiler error: Expected the TyV in layout index by key to be a layout type."
-        | TyLayoutHeapMutableSet(L(i,t),b,c) ->
+        | TyLayoutIndexAll _ | TyLayoutIndexByKey _ -> raise_codegen_error "Compiler error: Expected the TyV in layout index to be a layout type."
+        | TyLayoutMutableSet(L(i,t),b,c) ->
             let a = List.fold (fun s k ->
                 match s with
                 | DRecord l -> l |> Map.pick (fun (_,k') v -> if k = k' then Some v else None)
@@ -434,15 +455,22 @@ let codegen' backend_handler (env : PartEvalResult) (x : TypedBind []) =
     import "cupy as cp"
     from "dataclasses import dataclass"
     from "typing import NamedTuple, Union, Callable, Tuple"
-    env.globals.Add "i8 = i16 = i32 = i64 = u8 = u16 = u32 = u64 = int; f32 = f64 = float; char = string = str"
+    env.globals.Add "i8 = int; i16 = int; i32 = int; i64 = int; u8 = int; u16 = int; u32 = int; u64 = int; f32 = float; f64 = float; char = str; string = str"
     env.globals.Add ""
 
     let main = StringBuilder()
     let s = {text=main; indent=0}
     
-    line s "def main():"
+    line s "def main_body():"
     binds_start [||] (indent s) x
     s.text.AppendLine() |> ignore
+
+    line s "def main():"
+    line (indent s) "r = main_body()"
+    line (indent s) "cp.cuda.get_current_stream().synchronize() # This line is here so the `__trap()` calls on the kernel aren't missed."
+    line (indent s) "return r"
+    s.text.AppendLine() |> ignore
+
     line s "if __name__ == '__main__': result = main(); None if result is None else print(result)"
 
     let program = StringBuilder()
