@@ -236,6 +236,13 @@ let codegen (env : PartEvalResult) (x : TypedBind []) =
             complex <| fun s ->
             line s (sprintf "while %s do" (jp a))
             binds (indent s) b
+        | TyDo a ->
+            complex <| fun s ->
+            line s "do"
+            binds (indent s) a
+        | TyIndent a ->
+            complex <| fun s ->
+            binds (indent s) a
         | TyIntSwitch(L(i,_),on_succ,on_fail) ->
             complex <| fun s ->
             line s (sprintf "match v%i with" i)

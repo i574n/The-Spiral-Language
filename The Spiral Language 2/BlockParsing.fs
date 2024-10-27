@@ -57,6 +57,8 @@ type Op =
 
     // Branching
     | While
+    | Do
+    | Indent
 
     // Layout
     | LayoutToHeap

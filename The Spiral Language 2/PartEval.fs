@@ -137,6 +137,8 @@ and TypedOp =
     | TyStringLength of Ty * Data
     | TyIf of cond: Data * tr: TypedBind [] * fl: TypedBind []
     | TyWhile of cond: JoinPointCall * TypedBind []
+    | TyDo of TypedBind []
+    | TyIndent of TypedBind []
     | TyJoinPoint of JoinPointCall
     | TyBackend of (string ConsedNode * E) * ConsedNode<RData [] * Ty []> * Range
 type UnionRewrite = UnionData of string * Data | UnionBlockers of string Set
@@ -1577,6 +1579,13 @@ let peval (env : TopEnv) (x : E) =
                     | _, ty -> raise_type_error s <| sprintf "The body of the while loop must be of type unit.\nGot: %s" (show_ty ty)
                 | _ -> raise_type_error s <| sprintf "The conditional of the while loop must be of type bool.\nGot: %s" (show_ty ty)
             | _ -> raise_type_error s "The body of the conditional of the while loop must be a solitary join point."
+        | EOp(_,Do,[body]) ->
+            match term_scope s body with
+            | body, YB & ty -> push_typedop s (TyDo body) ty
+            | _, ty -> raise_type_error s <| sprintf "The body of the do binding must be of type unit.\nGot: %s" (show_ty ty)
+        | EOp(_,Indent,[body]) ->
+            let body, ty = term_scope s body
+            push_typedop s (TyIndent body) ty
         | EOp(_,(LayoutToHeap | LayoutToHeapMutable | LayoutToStackMutable as op),[a]) -> 
             let x = dyn false s (term s a)
             let ty = data_to_ty s x

@@ -395,6 +395,8 @@ let codegen (default_env : Startup.DefaultEnv) (globals : _ ResizeArray, fwd_dcl
             line s (sprintf "while (%s){" cond)
             binds (indent s) (BindsLocal [||]) b
             line s "}"
+        | TyDo a | TyIndent a ->
+            binds s ret a
         | TyIntSwitch(L(v_i,_),on_succ,on_fail) ->
             line s (sprintf "switch (v%i) {" v_i)
             let _ =

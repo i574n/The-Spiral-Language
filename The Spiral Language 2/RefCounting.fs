@@ -43,6 +43,7 @@ let refc_used_vars (x : TypedBind []) =
         | TyArrayLiteral(_,l) | TyOp(_,l) -> List.fold (fun s x -> s + fv x) Set.empty l
         | TyToLayout(x,_) | TyUnionBox(_,x,_) | TyFailwith(_,x) | TyConv(_,x) | TyArrayCreate(_,x) | TyArrayLength(_,x) | TyStringLength(_,x) -> fv x
         | TyWhile(cond,body) -> jp cond + binds body
+        | TyDo body | TyIndent body -> binds body
         | TyLayoutIndexAll(i) | TyLayoutIndexByKey(i,_) -> Set.singleton i
         | TyApply(i,d) | TyLayoutMutableSet(i,_,d) -> Set.singleton i + fv d
         | TyJoinPoint x -> jp x
@@ -112,6 +113,7 @@ let refc_prepass (new_vars : TyV Set) (increfed_vars : TyV Set) (x : TypedBind [
         | TySizeOf _ | TyLayoutIndexAll _ | TyLayoutIndexByKey _ | TyMacro _ | TyOp _ | TyFailwith _ | TyConv _ 
         | TyArrayCreate _ | TyArrayLength _ | TyStringLength _ | TyLayoutMutableSet _ | TyBackend _ -> ()
         | TyWhile(_,body) -> binds Set.empty Set.empty body
+        | TyDo body | TyIndent body -> binds Set.empty Set.empty body
         | TyIf(_,tr',fl') -> binds Set.empty increfed_vars tr'; binds Set.empty increfed_vars fl'
         | TyUnionUnbox(_,_,on_succs',on_fail') ->
             Map.iter (fun _ (lets,body) -> 
