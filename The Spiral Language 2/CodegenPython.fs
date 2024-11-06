@@ -209,7 +209,7 @@ let codegen' backend_handler (env : PartEvalResult) (x : TypedBind []) =
             | None -> raise_codegen_error $"In the backend_switch, expected a record with the '{backend_name}' field."
         | YMacro a -> a |> List.map (function Text a -> a | Type a -> tup_ty a | TypeLit a -> type_lit a) |> String.concat ""
         | YPrim a -> prim a
-        | YArray a -> "cp.ndarray"
+        | YArray a -> "(cp if cuda else np).ndarray"
         | YFun(a,b,FT_Vanilla) -> 
             let a = env.ty_to_data a |> data_free_vars |> Array.map (fun (L(_,t)) -> tyv t) |> String.concat ", "
             $"Callable[[{a}], {tup_ty b}]"
@@ -324,8 +324,8 @@ let codegen' backend_handler (env : PartEvalResult) (x : TypedBind []) =
                 | DRecord l -> l |> Map.pick (fun (_,k') v -> if k = k' then Some v else None)
                 | _ -> raise_codegen_error "Compiler error: Expected a record.") (mut t).data b
             Array.iter2 (fun (L(i',_)) b -> line s $"v{i}.v{i'} = {show_w b}") (data_free_vars a) (data_term_vars c)
-        | TyArrayLiteral(a,b) -> return' <| sprintf "cp.array([%s],dtype=%s)" (List.map tup_data' b |> String.concat ", ") (cupy_ty a)
-        | TyArrayCreate(a,b) -> return' $"cp.empty({tup_data b},dtype={cupy_ty a})" 
+        | TyArrayLiteral(a,b) -> return' <| sprintf "(cp if cuda else np).array([%s],dtype=%s)" (List.map tup_data' b |> String.concat ", ") (cupy_ty a)
+        | TyArrayCreate(a,b) -> return' $"(cp if cuda else np).empty({tup_data b},dtype={cupy_ty a})" 
         | TyFailwith(a,b) -> line s $"raise Exception({tup_data' b})"
         | TyConv(a,b) -> return' $"{tyv a}({tup_data b})"
         | TyApply(L(i,_),b) -> return' $"v{i}({tup_data' b})"
@@ -455,9 +455,11 @@ let codegen' backend_handler (env : PartEvalResult) (x : TypedBind []) =
             )
 
     import "cupy as cp"
+    import "numpy as np"
     from "dataclasses import dataclass"
     from "typing import NamedTuple, Union, Callable, Tuple"
     env.globals.Add "i8 = int; i16 = int; i32 = int; i64 = int; u8 = int; u16 = int; u32 = int; u64 = int; f32 = float; f64 = float; char = str; string = str"
+    env.globals.Add "cuda = False"
     env.globals.Add ""
 
     let main = StringBuilder()
@@ -469,7 +471,7 @@ let codegen' backend_handler (env : PartEvalResult) (x : TypedBind []) =
 
     line s "def main():"
     line (indent s) "r = main_body()"
-    line (indent s) "cp.cuda.get_current_stream().synchronize() # This line is here so the `__trap()` calls on the kernel aren't missed."
+    line (indent s) "if cuda: cp.cuda.get_current_stream().synchronize() # This line is here so the `__trap()` calls on the kernel aren't missed."
     line (indent s) "return r"
     s.text.AppendLine() |> ignore
 
