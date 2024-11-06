@@ -67,7 +67,6 @@ let show_w = function WV(L(i,_)) -> sprintf "v%i" i | WLit a -> lit a
 let args x = x |> Array.map (fun (L(i,_)) -> sprintf "v%i" i) |> String.concat ", "
 let prim x = Infer.show_primt x
 let cupy_ty x =
-    let er () = raise_codegen_error "Only stack allocated primitive types (i8,i16,i32,i64 and u8,u16,u32,u64 and f32,f64 and bool) are allowed in CuPy arrays."
     match x with
     | [|L(_,x)|] ->
         match x with
@@ -84,9 +83,9 @@ let cupy_ty x =
             | Float32T -> "cp.float32"
             | Float64T -> "cp.float64"
             | BoolT -> "cp.bool_"
-            | _ -> er()
-        | _ -> er()
-    | _ -> er()
+            | _ -> "object"
+        | _ -> "object"
+    | _ -> "object"
 
 type UnionRec = {tag : int; free_vars : Map<int * string, TyV[]>}
 type LayoutRec = {tag : int; data : Data; free_vars : TyV[]; free_vars_by_key : Map<int * string, TyV[]>}
