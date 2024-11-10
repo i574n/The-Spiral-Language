@@ -378,6 +378,8 @@ let codegen' backend_handler (env : PartEvalResult) (x : TypedBind []) =
             | Exp, [x] -> import "math"; sprintf "math.exp(%s)" (tup_data x)
             | Tanh, [x] -> import "math"; sprintf "math.tanh(%s)" (tup_data x)
             | Sqrt, [x] -> import "math"; sprintf "math.sqrt(%s)" (tup_data x)
+            | Sin, [x] -> import "math"; sprintf "math.sin(%s)" (tup_data x)
+            | Cos, [x] -> import "math"; sprintf "math.cos(%s)" (tup_data x)
             | NanIs, [x] -> import "math"; sprintf "math.isnan(%s)" (tup_data x)
             | UnionTag, [DUnion(_,l) | DV(L(_,YUnion l)) as x] -> sprintf "%s.tag" (tup_data x) 
             | _ -> raise_codegen_error <| sprintf "Compiler error: %A with %i args not supported" op l.Length
