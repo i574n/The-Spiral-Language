@@ -249,8 +249,10 @@ let codegen' backend_handler (env : PartEvalResult) (x : TypedBind []) =
         | TyWhile(a,b) ->
             line s (sprintf "while %s:" (jp a))
             binds g_decr (indent s) (BindsLocal [||]) b
-        | TyDo a | TyIndent a ->
+        | TyDo a ->
             binds g_decr s ret a
+        | TyIndent a ->
+            binds g_decr (indent s) ret a
         | TyIntSwitch(L(v_i,_),on_succ,on_fail) ->
             Array.iteri (fun i x ->
                 if i = 0 then line s $"if v{v_i} == {i}:"
