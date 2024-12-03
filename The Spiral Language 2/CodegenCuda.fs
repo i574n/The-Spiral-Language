@@ -837,9 +837,13 @@ let codegen (default_env : Startup.DefaultEnv) (globals : _ ResizeArray, fwd_dcl
             let er() = raise_codegen_error "The return type of the __global__ kernel in the Cuda backend should be a void type or a record of type {cluster_dims : {x : int; y : int; z : int}}."
             match binds_last_data x with
             | DRecord m when m.Count = 1 ->
-                match Map.tryFind "cluster_dims" m with
+                match Map.tryPick (fun (_, k) v -> if k = "cluster_dims" then Some v else None) m with
                 | Some(DRecord m) when m.Count = 3 ->
-                    match Map.tryFind "x" m, Map.tryFind "y" m, Map.tryFind "z" m with
+                    match
+                        Map.tryPick (fun (_, k) v -> if k = "x" then Some v else None) m,
+                        Map.tryPick (fun (_, k) v -> if k = "y" then Some v else None) m,
+                        Map.tryPick (fun (_, k) v -> if k = "z" then Some v else None) m
+                    with
                     | Some(DSymbol x), Some(DSymbol y), Some(DSymbol z) ->  $"void __cluster_dims__({x},{y},{z})"
                     | Some(DV _), _, _
                     | _, Some(DV _), _

@@ -2,6 +2,7 @@
 $WarningPreference = 'SilentlyContinue'
 # This instructs PowerShell to treat non-terminating errors as terminating errors, which will halt script execution.
 $ErrorActionPreference = "Stop"
+Set-Location $PSScriptRoot
 
 try {
     $keys = Get-Content -Raw -Path .\keys.json | ConvertFrom-Json
