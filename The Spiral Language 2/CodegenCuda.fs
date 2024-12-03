@@ -833,18 +833,28 @@ let codegen (default_env : Startup.DefaultEnv) (globals : _ ResizeArray, fwd_dcl
     and stack_mut : _ -> LayoutRec = layout_tmpl false "StackMut"
 
     fun vs (x : TypedBind []) ->
-        match binds_last_data x |> data_term_vars |> term_vars_to_tys with
-        | [||] ->
-            let main_defs' = {text=StringBuilder(); indent=0}
-            let args = vs |> Array.mapi (fun i (L(_,x)) -> $"{tyv x} v{i}") |> String.concat ", "
-            line main_defs' $"extern \"C\" __global__ void entry%i{main_defs.Count}(%s{args}) {{"
-            binds_start (indent main_defs') x
-            line main_defs' "}"
-            main_defs.Add(main_defs'.text.ToString())
+        let ret_ty =
+            let er() = raise_codegen_error "The return type of the __global__ kernel in the Cuda backend should be a void type or a record of type {cluster_dims : {x : int; y : int; z : int}}."
+            match binds_last_data x with
+            | DRecord m when m.Count = 1 ->
+                match Map.tryFind "cluster_dims" m with
+                | Some(DRecord m) when m.Count = 3 ->
+                    match Map.tryFind "x" m, Map.tryFind "y" m, Map.tryFind "z" m with
+                    | Some(DSymbol x), Some(DSymbol y), Some(DSymbol z) ->  $"void __cluster_dims__({x},{y},{z})"
+                    | Some(DV _), _, _
+                    | _, Some(DV _), _
+                    | _, _, Some(DV _) ->  raise_codegen_error "All the variables have to be known at compile time."
+                    | _ -> er()
+                | _ -> er()
+            | DB -> "void"
+            | _ -> er()
+        let main_defs' = {text=StringBuilder(); indent=0}
+        let args = vs |> Array.mapi (fun i (L(_,x)) -> $"{tyv x} v{i}") |> String.concat ", "
+        line main_defs' $"extern \"C\" __global__ {ret_ty} entry%i{main_defs.Count}(%s{args}) {{"
+        binds_start (indent main_defs') x
+        line main_defs' "}"
+        main_defs.Add(main_defs'.text.ToString())
 
-            global' $"using default_int = {prim default_env.default_int};"
-            global' $"using default_uint = {prim default_env.default_uint};"
-            global' (IO.File.ReadAllText(IO.Path.Join(AppDomain.CurrentDomain.BaseDirectory, "reference_counting.cuh")))
-            
-        | _ ->
-            raise_codegen_error $"The return type of the __global__ kernel in the Cuda backend should be a void type."
+        global' $"using default_int = {prim default_env.default_int};"
+        global' $"using default_uint = {prim default_env.default_uint};"
+        global' (IO.File.ReadAllText(IO.Path.Join(AppDomain.CurrentDomain.BaseDirectory, "reference_counting.cuh")))
