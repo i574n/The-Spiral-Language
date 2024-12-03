@@ -1,55 +1,73 @@
+# The Spiral Language
+
+![Spiral Logo](spiral_logo.png)
+
+---
+
+**\* Temporary fork with:**
+
+- Jupyter Notebooks support (.NET Interactive)
+  - Hover in cells (TODO)
+- Compiler
+  - Fields sorted by index instead of name (could also output name)
+  - Globals from types (buggy/needs review)
+  - Normalized paths
+  - File based tracing
+  - Non-numeric arrays (Python/CUDA)
+  - Additional codegen backends (Zig, Gleam, etc) (TODO)
+  - Indent function
+
+---
 <!-- TOC -->
 
-- [News](#news)
-    - [Date: 7/28/2024 - Higher Ranked Types have been added to the language](#date-7282024---higher-ranked-types-have-been-added-to-the-language)
-    - [Date: 7/5/2024 - GADTs have been added to the language](#date-752024---gadts-have-been-added-to-the-language)
-    - [Date: 6/17/2024 - The Python + Cuda backend now supports all of Spiral's featues](#date-6172024---the-python--cuda-backend-now-supports-all-of-spirals-featues)
-    - [Date: 3/30/2024 - Added existentials to the language](#date-3302024---added-existentials-to-the-language)
-    - [Date: 8/27/2023 - Check out the Spiral playlist on Youtube](#date-8272023---check-out-the-spiral-playlist-on-youtube)
-    - [Date: 1/7/2023 - UPMEM demo & backend](#date-172023---upmem-demo--backend)
-    - [Date: 12/21/2022 - Python backend](#date-12212022---python-backend)
-    - [Date: 7/13/2022 - C backend](#date-7132022---c-backend)
-    - [Date: 8/21/2021 - Updated the docs](#date-8212021---updated-the-docs)
-- [The Spiral Language](#the-spiral-language)
-    - [Overview](#overview)
-    - [Getting Spiral](#getting-spiral)
-    - [Status in 8/17/2021](#status-in-8172021)
-    - [Projects & Packages](#projects--packages)
-    - [Top-Down Segment](#top-down-segment)
-        - [Compilation](#compilation)
-        - [Basics](#basics)
-        - [Join points](#join-points)
-            - [Join points and language interop](#join-points-and-language-interop)
-        - [Functions](#functions)
-        - [What triggers dyning?](#what-triggers-dyning)
-        - [Macros](#macros)
-        - [Layout types](#layout-types)
-        - [Nominals](#nominals)
-        - [Symbols](#symbols)
-            - [Records](#records)
-            - [Unions](#unions)
-        - [Type Literals](#type-literals)
-            - [v operator in macros](#v-operator-in-macros)
-        - [Prototypes](#prototypes)
-        - [Existentials](#existentials)
-        - [GADTs](#gadts)
-        - [Higher Ranked Types](#higher-ranked-types)
-    - [Heap Allocation vs Code Size](#heap-allocation-vs-code-size)
-    - [Notes On Arrays](#notes-on-arrays)
-    - [Bottom-Up Segment](#bottom-up-segment)
-        - [Functions](#functions)
-        - [Branching](#branching)
-            - [Loop Unrolling](#loop-unrolling)
-            - [Compiler Crashing](#compiler-crashing)
-            - [Print Static](#print-static)
-        - [Type Inference In Bottom-Up Style](#type-inference-in-bottom-up-style)
-        - [Real Nominals And Inverse Arrays](#real-nominals-and-inverse-arrays)
-    - [Special behaviors in the Cuda backend](#special-behaviors-in-the-cuda-backend)
-        - [noinline_ prefix in named join points](#noinline_-prefix-in-named-join-points)
-        - [v variables in macros](#v-variables-in-macros)
-        - [Layout type indexing returns references](#layout-type-indexing-returns-references)
-        - [Stack mutable layout types](#stack-mutable-layout-types)
-    - [Known Bugs](#known-bugs)
+- [Date: 7/28/2024 - Higher Ranked Types have been added to the language](#date-7282024---higher-ranked-types-have-been-added-to-the-language)
+- [Date: 7/5/2024 - GADTs have been added to the language](#date-752024---gadts-have-been-added-to-the-language)
+- [Date: 6/17/2024 - The Python + Cuda backend now supports all of Spiral's featues](#date-6172024---the-python--cuda-backend-now-supports-all-of-spirals-featues)
+- [Date: 3/30/2024 - Added existentials to the language](#date-3302024---added-existentials-to-the-language)
+- [Date: 8/27/2023 - Check out the Spiral playlist on Youtube](#date-8272023---check-out-the-spiral-playlist-on-youtube)
+- [Date: 1/7/2023 - UPMEM demo \& backend](#date-172023---upmem-demo--backend)
+- [Date: 12/21/2022 - Python backend](#date-12212022---python-backend)
+- [Date: 7/13/2022 - C backend](#date-7132022---c-backend)
+- [Date: 8/21/2021 - Updated the docs](#date-8212021---updated-the-docs)
+- [Overview](#overview)
+- [Getting Spiral](#getting-spiral)
+- [Status in 8/17/2021](#status-in-8172021)
+- [Projects \& Packages](#projects--packages)
+- [Top-Down Segment](#top-down-segment)
+  - [Compilation](#compilation)
+  - [Basics](#basics)
+  - [Join points](#join-points)
+    - [Join points and language interop](#join-points-and-language-interop)
+  - [Functions](#functions)
+  - [What triggers dyning?](#what-triggers-dyning)
+  - [Macros](#macros)
+  - [Layout types](#layout-types)
+  - [Nominals](#nominals)
+  - [Symbols](#symbols)
+    - [Records](#records)
+    - [Unions](#unions)
+  - [Type Literals](#type-literals)
+    - [`v` operator in macros](#v-operator-in-macros)
+  - [Prototypes](#prototypes)
+  - [Existentials](#existentials)
+  - [GADTs](#gadts)
+  - [Higher Ranked Types](#higher-ranked-types)
+- [Heap Allocation vs Code Size](#heap-allocation-vs-code-size)
+- [Notes On Arrays](#notes-on-arrays)
+- [Bottom-Up Segment](#bottom-up-segment)
+  - [Functions](#functions-1)
+  - [Branching](#branching)
+    - [Loop Unrolling](#loop-unrolling)
+    - [Compiler Crashing](#compiler-crashing)
+    - [Print Static](#print-static)
+  - [Type Inference In Bottom-Up Style](#type-inference-in-bottom-up-style)
+  - [Real Nominals And Inverse Arrays](#real-nominals-and-inverse-arrays)
+- [Special behaviors in the Cuda backend](#special-behaviors-in-the-cuda-backend)
+  - [`noinline_` prefix in named join points](#noinline_-prefix-in-named-join-points)
+  - [`v` variables in macros](#v-variables-in-macros)
+  - [Layout type indexing returns references](#layout-type-indexing-returns-references)
+  - [Stack mutable layout types](#stack-mutable-layout-types)
+- [Known Bugs](#known-bugs)
 
 <!-- /TOC -->
 
@@ -105,9 +123,6 @@ When I get some novel hardware it is going to be easy to adapt it to them. Until
 
 Updated the documentation for v2.1. Spiral is quite stable in its current iteration and is no longer the alpha that it was at the end of January. The bugs should be dealt with and no features will get removed or added.
 
-# The Spiral Language
-
-![Spiral Logo](spiral_logo.png)
 
 ## Overview
 

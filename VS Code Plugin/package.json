@@ -1,31 +1,31 @@
 {
 	"name": "spiral-lang-vscode-i574n",
 	"displayName": "The Spiral Language (i574n)",
-	"version": "2.15.6",
-	"description": "VS Code editor support plugin + the Spiral language compiler.",
+	"version": "2.15.11",
+	"description": "*Notebooks Fork* VS Code editor support plugin + the Spiral language compiler.",
 	"repository": {
 		"url": "https://github.com/i574n/The-Spiral-Language"
 	},
 	"publisher": "i574n",
 	"author": "Marko Grdinić",
 	"engines": {
-		"vscode": "^1.81.0"
+		"vscode": "^1.95.0"
 	},
 	"module": "true",
 	"main": "out/index.js",
 	"activationEvents": [
-    "onNotebook:dotnet-interactive",
-    "onNotebook:dotnet-interactive-window",
-    "onNotebook:jupyter-notebook",
-    "onNotebook:polyglot-notebook",
-    "onNotebook:polyglot-notebook-window",
-    "onNotebook:jupyter-notebook",
-    "onCommand:dotnet-interactive.acquire",
-    "onCommand:polyglot-notebook.fileNew",
-    "onCommand:polyglot-notebook.newNotebook",
-    "onCommand:polyglot-notebook.openNotebook",
-    "onCommand:polyglot-notebook.saveAsNotebook",
-    "onView:polyglot-notebook-panel-values"
+		"onNotebook:dotnet-interactive",
+		"onNotebook:dotnet-interactive-window",
+		"onNotebook:jupyter-notebook",
+		"onNotebook:polyglot-notebook",
+		"onNotebook:polyglot-notebook-window",
+		"onNotebook:jupyter-notebook",
+		"onCommand:dotnet-interactive.acquire",
+		"onCommand:polyglot-notebook.fileNew",
+		"onCommand:polyglot-notebook.newNotebook",
+		"onCommand:polyglot-notebook.openNotebook",
+		"onCommand:polyglot-notebook.saveAsNotebook",
+		"onView:polyglot-notebook-panel-values"
 	],
 	"contributes": {
 		"configuration": {
@@ -158,7 +158,7 @@
 		]
 	},
 	"scripts": {
-    "outdated-pre": "npm-check-updates --target greatest",
+		"outdated-pre": "npm-check-updates --target greatest",
 		"vscode:prepublish": "npm run esbuild-base -- --minify",
 		"esbuild-base": "esbuild ./src/index.ts --bundle --outfile=out/index.js --external:vscode --format=cjs --platform=node",
 		"esbuild": "npm run esbuild-base -- --sourcemap",
@@ -169,11 +169,11 @@
 		"spiral"
 	],
 	"devDependencies": {
-		"npm-check-updates": "~17.0.0-5",
-		"@types/node": "~20.14",
-		"@types/vscode": "~1.81",
-		"@vscode/vsce": "~2.30",
-		"esbuild": "~0.21",
+		"npm-check-updates": "~17.1.11",
+		"@types/node": "~22.10",
+		"@types/vscode": "~1.95",
+		"@vscode/vsce": "~3.2",
+		"esbuild": "~0.24",
 		"typescript": "next"
 	},
 	"dependencies": {
