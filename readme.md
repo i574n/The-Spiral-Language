@@ -16,6 +16,7 @@
   - Non-numeric arrays (Python/CUDA)
   - Additional codegen backends (Zig, Gleam, etc) (TODO)
   - Indent function
+  - Automatic interpolation macro conversion
 
 ---
 <!-- TOC -->
