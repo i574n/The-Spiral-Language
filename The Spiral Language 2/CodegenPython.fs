@@ -251,7 +251,7 @@ let codegen' backend_handler (env : PartEvalResult) (x : TypedBind []) =
             |> List.map (function
                 | CMText x when x |> Lib.SpiralSm.starts_with "$\"" ->
                     let x = x |> Lib.SpiralSm.replace "%A{" "{"
-                    $"f\"{x.[2..^0]}"
+                    $"f\"{x.[2..]}"
                 | CMText x -> x
                 | CMTerm x -> tup_data x
                 | CMType x -> tup_ty x
