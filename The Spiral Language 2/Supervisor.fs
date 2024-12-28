@@ -269,7 +269,7 @@ let supervisor_server (default_env : Startup.DefaultEnv) atten (errors : Supervi
         | ProjectFileChange x | ProjectFileOpen x -> proj_open default_env s (dir x.uri,Some x.spiprojText) |> handle_packages
         | FileOpen x ->
             let file = file x.uri
-            trace Verbose (fun () -> $"Supervisor.supervisor_server.loop.FileOpen / uri: {x.uri} / file: {file}") _locals
+            trace Verbose (fun () -> $"Supervisor.supervisor_server.loop.FileOpen / x: %A{x} / file: {file}") _locals
             match Map.tryFind file s.modules with
             | Some m -> WDiff.wdiff_module_all default_env m x.spiText
             | None -> WDiff.wdiff_module_init_all default_env (is_top_down file) x.spiText
@@ -277,7 +277,7 @@ let supervisor_server (default_env : Startup.DefaultEnv) atten (errors : Supervi
             |> handle_file_packages file
         | FileChange x ->
             let file = file x.uri
-            trace Verbose (fun () -> $"Supervisor.supervisor_server.loop.FileChange / uri: {x.uri} / file: {file}") _locals
+            trace Verbose (fun () -> $"Supervisor.supervisor_server.loop.FileChange / x: %A{x} / file: {file}") _locals
             match Map.tryFind file s.modules with
             | None -> fatal "It is not possible to apply a change to a file that is not present in the environment. Try reopening it in the editor."; s
             | Some m ->
@@ -285,7 +285,7 @@ let supervisor_server (default_env : Startup.DefaultEnv) atten (errors : Supervi
                 | Ok v -> proj_revalidate_owner default_env {s with modules = Map.add file v s.modules} file |> handle_file_packages file
                 | Error er -> fatal er; s
         | FileDelete x ->
-            trace Verbose (fun () -> $"Supervisor.supervisor_server.loop.FileDelete / uris: {x.uris}") _locals
+            trace Verbose (fun () -> $"Supervisor.supervisor_server.loop.FileDelete / x: {x}") _locals
             file_delete default_env s (Array.map file x.uris) |> handle_files_packages
         | ProjectFileLinks(x,res) ->
             let l =
@@ -378,6 +378,8 @@ let supervisor_server (default_env : Startup.DefaultEnv) atten (errors : Supervi
         | HoverAt(x,res) ->
             let file = file x.uri
             let pos = x.pos
+            let _locals () = $"x: %A{x} / file: {file} / res: %A{res}"
+            trace Verbose (fun () -> $"Supervisor.supervisor_server.HoverAt") _locals
             let go_hover x =
                 match x with
                 | None -> None
@@ -385,12 +387,19 @@ let supervisor_server (default_env : Startup.DefaultEnv) atten (errors : Supervi
                     x.hovers |> Array.tryPick (fun ((a,b),r) ->
                         if pos.line = a.line && (a.character <= pos.character && pos.character < b.character) then Some r else None
                         )
+                |> (fun x ->
+                    let _locals () = $"x: %A{x}"
+                    trace Verbose (fun () -> $"Supervisor.supervisor_server.HoverAt.go_hover") _locals
+                    x
+                )
                 |> IVar.fill res
             let go_block (x : WDiff.TypecheckerState) =
                 let rec loop s (x : WDiff.TypecheckerStateValue Stream) =
                     x >>= function
                     | Nil -> go_hover s
                     | Cons((_,x,_),b) ->
+                        let _locals () = $"b: {b}"
+                        trace Verbose (fun () -> $"Supervisor.supervisor_server.HoverAt.go_block.loop Cons") _locals
                         if x.offset <= pos.line then loop (Some x) b
                         // If the block is over the offset that means the previous one must be the right choice.
                         else go_hover s
@@ -402,10 +411,10 @@ let supervisor_server (default_env : Startup.DefaultEnv) atten (errors : Supervi
                 and list l = List.exists loop l
                 list trees
             let rec go_parent (x : DirectoryInfo) =
+                trace Verbose (fun () -> $"Supervisor.supervisor_server.HoverAt.go_parent / x: %A{x}") _locals
                 if x = null then false
                 else
                     let path = x.FullName |> SpiralFileSystem.normalize_path
-                    trace Verbose (fun () -> $"Supervisor.supervisor_server.HoverAt.go_parent / path: {path}") _locals
                     if Map.containsKey path s.packages then
                         let pid = (fst s.package_ids).[path]
                         match Map.tryFind pid s.packages_infer.ok with
@@ -418,7 +427,7 @@ let supervisor_server (default_env : Startup.DefaultEnv) atten (errors : Supervi
         | BuildFile x ->
             let backend = x.backend
             let file = file x.uri
-            let _locals () = $"file: {file}"
+            let _locals () = $"x: %A{x} / file: {file}"
             trace Verbose (fun () -> $"Supervisor.supervisor_server.BuildFile") _locals
             let handle_build_result = function
                 | BuildOk l ->
@@ -679,7 +688,7 @@ let [<EntryPoint>] main args =
             .AllowAnyMethod()
             .AllowCredentials() |> ignore
         ) |> ignore
-    app.MapHub<SpiralHub>("") |> ignore
+    app.MapHub<SpiralHub> "" |> ignore
 
     use _ = Eval.startTokenRangeWatcher ()
     use _ = Eval.startCommandsWatcher uri_server
