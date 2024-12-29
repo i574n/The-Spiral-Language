@@ -7,7 +7,6 @@
 **\* Temporary fork with:**
 
 - Jupyter Notebooks support (.NET Interactive)
-  - Hover in cells (TODO)
 - Compiler
   - Fields sorted by index instead of name (could also output name)
   - Globals from types (buggy/needs review)
