@@ -258,8 +258,11 @@ let loader_package default_env (packages : SchemaEnv) (modules : ModuleEnv) (pdi
         trace Verbose (fun () -> $"ServerUtils.loader_package.load_package_from_disk / pdir: {pdir}") _locals
         task {
             if Directory.Exists pdir then
-                let! x = File.ReadAllTextAsync(spiproj_suffix pdir)
-                try return schema (pdir,x) with _ -> return LoadPackage(pdir,None)
+                try
+                    let! x = File.ReadAllTextAsync(spiproj_suffix pdir)
+                    return schema (pdir,x)
+                with _ ->
+                    return LoadPackage(pdir,None)
             else return LoadPackage(pdir,None) // Ditto.
         } |> queue.Enqueue
     let load_package_some (pdir,text) =
