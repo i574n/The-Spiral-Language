@@ -113,10 +113,11 @@ type ProjEnvTCResult = ResultMap<PackageId,ProjStateTC>
 let wdiff_projenvr_sync_schema default_env funs_packages funs_files (ids : Map<string, PackageId>) (packages : SchemaEnv) 
         (state : ResultMap<PackageId,ProjState<'file_input,'file,'package>>) order =
     Array.fold (fun (s : ResultMap<_,_>) x ->
-        trace Verbose (fun () -> $"ServerUtils.wdiff_projenvr_sync_schema / x: {x}") _locals
-        match Map.tryFind x ids with
+        let x' = x |> Lib.SpiralFileSystem.normalize_path
+        trace Verbose (fun () -> $"ServerUtils.wdiff_projenvr_sync_schema / x: {x} / x': {x'}") _locals
+        match Map.tryFind x' ids with
         | Some pid ->
-            match Map.tryFind x packages with
+            match Map.tryFind x' packages with
             | Some schema ->
                 match Map.tryFind pid s.ok, Map.tryFind pid s.error, ss_has_error schema with
                 | Some _, Some _,_ -> failwith "Compiler error: The ok and error maps should be disjoint."
@@ -133,14 +134,15 @@ let wdiff_projenvr_sync_schema default_env funs_packages funs_files (ids : Map<s
 let projenv_update_packages default_env funs_packages funs_files (ids : Map<string, PackageId>) (packages : SchemaEnv)
         (state : Map<PackageId,ProjState<'a,'b,'state>>)  (dirty_packages : Dictionary<_,_>, order : string []) =
     Array.foldBack (fun x l ->
-        trace Verbose (fun () -> $"ServerUtils.projenv_update_packages / x: {x}") _locals
-        match Map.tryFind x packages with
+        let x' = x |> Lib.SpiralFileSystem.normalize_path
+        trace Verbose (fun () -> $"ServerUtils.projenv_update_packages / x: {x} / x': {x'}") _locals
+        match Map.tryFind x' packages with
         | None -> l
         | Some schema when ss_has_error schema -> l
         | Some schema ->
-            let pid = ids.[x]
+            let pid = ids.[x']
             let packages = schema.schema.packages |> List.map (fun x -> x.name, ids.[snd x.dir])
-            match dirty_packages.TryGetValue(x) with
+            match dirty_packages.TryGetValue(x') with
             | true, x -> UpdatePackageModule(pid,packages,x) :: l
             | false, _ -> UpdatePackage(pid,packages) :: l
         ) order []
@@ -185,21 +187,23 @@ let inline dirty_nodes_template funs (ids : Map<string, PackageId>) (packages : 
         (state : Map<PackageId,_>) (dirty_packages : string HashSet) =
     let d = Dictionary<string,_ [] * ProjFiles>()
     dirty_packages |> Seq.iter (fun path ->
-        trace Verbose (fun () -> $"ServerUtils.dirty_nodes_template / path: {path}") _locals
-        match Map.tryFind path ids with
+        let path' = path |> Lib.SpiralFileSystem.normalize_path
+        trace Verbose (fun () -> $"ServerUtils.dirty_nodes_template / path: {path} / path': {path'}") _locals
+        match Map.tryFind path' ids with
         | Some pid ->
             match Map.tryFind pid state with
             | Some x -> 
                 let modules = modules pid
-                let files = proj_file_from_schema packages.[path].schema
+                let files = proj_file_from_schema packages.[path'].schema
                 let state = 
                     let state = proj_file_get_input x.files.uids_file x.files.files
                     proj_file_make_input (fun mid path ->
+                        trace Verbose (fun () -> $"ServerUtils.dirty_nodes_template / proj_file_make_input / path: {path} / path': {path'}") _locals
                         match state.TryGetValue(path) with
                         | true, x -> wdiff_file_update_input funs x (modules mid path)
                         | false, _ -> funs.init (modules mid path)
                         ) files
-                d.Add(path,(state,files))
+                d.Add(path',(state,files))
             | None -> ()
         | None -> ()
         )
@@ -298,7 +302,9 @@ let loader_package default_env (packages : SchemaEnv) (modules : ModuleEnv) (pdi
     while 0 < queue.Count do
         match queue.Dequeue().Result with
         | LoadPackage(pdir,Some x) -> 
-            packages <- Map.add pdir x packages; dirty_packages.Add(pdir) |> ignore; invalidate_parent packages (Directory.GetParent(pdir))
+            let pdir' = pdir |> Lib.SpiralFileSystem.normalize_path
+            trace Verbose (fun () -> $"ServerUtils.loader_package.LoadPackage / pdir: {pdir} / pdir': {pdir'}") _locals
+            packages <- Map.add pdir' x packages; dirty_packages.Add(pdir') |> ignore; invalidate_parent packages (Directory.GetParent(pdir'))
             x.schema.packages |> List.iter (fun x -> load_package_none packages (snd x.dir))
             let rec loop = function
                 | FileHierarchy.Directory(_,_,_,l) -> list l
