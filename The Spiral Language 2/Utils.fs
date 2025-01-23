@@ -23,7 +23,7 @@ let inline remove (dict : Dictionary<_,_>) x on_succ on_fail =
     let mutable q = Unchecked.defaultof<_>
     if dict.Remove(x, &q) then on_succ q else on_fail ()
 let file_uri (x : string) =
-    let result = x |> Lib.SpiralFileSystem.normalize_path |> Lib.SpiralFileSystem.new_file_uri
+    let result = x |> Lib.SpiralFileSystem.standardize_path |> Lib.SpiralFileSystem.new_file_uri
     trace Verbose (fun () -> $"Utils.file_uri / x: {x} / result: {result}") _locals
     result
 

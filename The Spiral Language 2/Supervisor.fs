@@ -71,8 +71,8 @@ let proj_revalidate_owner default_env s file =
     let rec loop (x : DirectoryInfo) =
         if x = null then [||], s
         else
-            let x' = x.FullName |> SpiralFileSystem.normalize_path
-            trace Verbose (fun () -> $"""Supervisor.proj_revalidate_owner / x.FullName: {x.FullName |> SpiralSm.replace "\\" "|"} / x': {x'}""") _locals
+            let x' = x.FullName |> SpiralFileSystem.standardize_path
+            // trace Verbose (fun () -> $"""Supervisor.proj_revalidate_owner / x.FullName: {x.FullName |> SpiralSm.replace "\\" "|"} / x': {x'}""") _locals
             let x_ = x
             let x = {| FullName = x' |}
             if Map.containsKey x.FullName s.packages then proj_validate default_env s (HashSet [x.FullName])
@@ -94,7 +94,7 @@ let file_delete default_env s (files : string []) =
         trace Verbose (fun () -> $"Supervisor.file_delete.revalidate_parent.loop / x.FullName: {x}") _locals
         let rec loop (x : DirectoryInfo) =
             if x <> null then
-                let x' = x.FullName |> SpiralFileSystem.normalize_path
+                let x' = x.FullName |> SpiralFileSystem.standardize_path
                 let x = DirectoryInfo x'
                 if Map.containsKey x.FullName s.packages then dirty_packages.Add(x.FullName) |> ignore
                 else loop x.Parent
@@ -140,7 +140,7 @@ let attention_server (errors : SupervisorErrorSources) (req : _ Ch) =
                     next ers
 
         let loop_module (s : AttentionState) mpath (m : WDiff.ModuleState) =
-            let mpath' = mpath |> SpiralFileSystem.normalize_path
+            let mpath' = mpath |> SpiralFileSystem.standardize_path
             let uri = Utils.file_uri mpath
             trace Verbose (fun () -> $"Supervisor.attention_server.loop.loop_module / mpath: {mpath} / mpath': {mpath'} / uri: {uri}") _locals
             let mpath = mpath'
@@ -158,9 +158,9 @@ let attention_server (errors : SupervisorErrorSources) (req : _ Ch) =
 
         let rec loop_package (s : AttentionState) pdir = function
             | (mpath,l) :: ls ->
-                let mpath' = mpath |> SpiralFileSystem.normalize_path
+                let mpath' = mpath |> SpiralFileSystem.standardize_path
                 let uri = Utils.file_uri mpath
-                let pdir' = pdir |> Lib.SpiralFileSystem.normalize_path
+                let pdir' = pdir |> Lib.SpiralFileSystem.standardize_path
                 trace Verbose (fun () -> $"Supervisor.attention_server.loop.loop_package / mpath: {mpath} / mpath': {mpath'} / uri: {uri} / pdir: {pdir} / pdir': {pdir'}") _locals
                 let interrupt x = loop (update {s with packages=push pdir s.packages} x)
                 let rec typer (r : WDiff.TypecheckerStateValue Stream) ers' = r >>= function
@@ -178,7 +178,7 @@ let attention_server (errors : SupervisorErrorSources) (req : _ Ch) =
         let package s =
             match s.packages with
             | se,x :: xs ->
-                let x' = x |> SpiralFileSystem.normalize_path
+                let x' = x |> SpiralFileSystem.standardize_path
                 trace Verbose (fun () -> $"Supervisor.attention_server.loop.package / x: {x} / x': {x'}") _locals
                 let x = x'
                 let s = {s with packages=Set.remove x se,xs}
@@ -197,7 +197,7 @@ let attention_server (errors : SupervisorErrorSources) (req : _ Ch) =
                             let rec loop x s =
                                 match x with
                                 | WDiff.File(mid,path,_) ->
-                                    let path' = path |> Lib.SpiralFileSystem.normalize_path
+                                    let path' = path |> Lib.SpiralFileSystem.standardize_path
                                     trace Verbose (fun () -> $"Supervisor.attention_server.loop | WDiff.File(mid,path,_) / path: {path} / path': {path'}") _locals
                                     (path', (fst uids_file.[mid]).result) :: s
                                 | WDiff.Directory(_,_,l) -> list l s
@@ -251,14 +251,14 @@ let targetDir = workspaceRoot </> "target/spiral_Eval"
 let traceDir = targetDir </> "supervisor_trace"
 let dir uri =
     let result = FileInfo(Uri(uri).LocalPath).Directory.FullName
-    let result' = result |> SpiralFileSystem.normalize_path
+    let result' = result |> SpiralFileSystem.standardize_path
     trace Verbose (fun () -> $"Supervisor.dir / uri: {uri} / result: {result} / result': {result'}") _locals
     result'
 let file uri =
     let result = FileInfo(Uri(uri).LocalPath).FullName
-    let result' = result |> SpiralFileSystem.normalize_path
-    let result = result |> SpiralSm.replace "\\" "|"
-    trace Verbose (fun () -> $"Supervisor.file / uri: {uri} / result: {result} / result': {result'}") _locals
+    let result' = result |> SpiralFileSystem.standardize_path
+    // let result = result |> SpiralSm.replace "\\" "|"
+    // trace Verbose (fun () -> $"Supervisor.file / uri: {uri} / result: {result} / result': {result'}") _locals
     result'
 let supervisor_server (default_env : Startup.DefaultEnv) atten (errors : SupervisorErrorSources) req =
     let fatal x = Hopac.start (Ch.send errors.fatal x)
@@ -269,7 +269,7 @@ let supervisor_server (default_env : Startup.DefaultEnv) atten (errors : Supervi
         | ProjectFileChange x | ProjectFileOpen x -> proj_open default_env s (dir x.uri,Some x.spiprojText) |> handle_packages
         | FileOpen x ->
             let file = file x.uri
-            trace Verbose (fun () -> $"Supervisor.supervisor_server.loop.FileOpen / x: %A{x} / file: {file}") _locals
+            // trace Verbose (fun () -> $"Supervisor.supervisor_server.loop.FileOpen / x: %A{x} / file: {file}") _locals
             match Map.tryFind file s.modules with
             | Some m -> WDiff.wdiff_module_all default_env m x.spiText
             | None -> WDiff.wdiff_module_init_all default_env (is_top_down file) x.spiText
@@ -414,7 +414,7 @@ let supervisor_server (default_env : Startup.DefaultEnv) atten (errors : Supervi
                 trace Verbose (fun () -> $"Supervisor.supervisor_server.HoverAt.go_parent / x: %A{x}") _locals
                 if x = null then false
                 else
-                    let path = x.FullName |> SpiralFileSystem.normalize_path
+                    let path = x.FullName |> SpiralFileSystem.standardize_path
                     if Map.containsKey path s.packages then
                         let pid = (fst s.package_ids).[path]
                         match Map.tryFind pid s.packages_infer.ok with
@@ -518,7 +518,7 @@ let supervisor_server (default_env : Startup.DefaultEnv) atten (errors : Supervi
             let rec find_owner (x : DirectoryInfo) =
                 if x = null then fatal $"Cannot find the package file of {file}"; s
                 else
-                    let x' = x.FullName |> SpiralFileSystem.normalize_path
+                    let x' = x.FullName |> SpiralFileSystem.standardize_path
                     trace Verbose (fun () -> $"""Supervisor.supervisor_server.BuildFile.find_owner / x.FullName: {x.FullName |> SpiralSm.replace "\\" "|"} / x': {x'}""") _locals
                     let x_ = x
                     let x = {| FullName = x' |}

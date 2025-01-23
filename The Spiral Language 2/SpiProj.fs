@@ -190,8 +190,8 @@ let schema (pdir,text) : SchemaResult = config text |> Result.bind (fun x ->
                 Path.Combine(a,b)
                 |> Path.GetFullPath
                 |> fun result ->
-                    let result' = result |> Lib.SpiralFileSystem.normalize_path
-                    trace Verbose (fun () -> $"""SpiProj.schema.combine / a: {a} / b: {b} / result: {result |> Lib.SpiralSm.replace "\\" "|"} / result': {result'}""") _locals
+                    let result' = result |> Lib.SpiralFileSystem.standardize_path
+                    // trace Verbose (fun () -> $"""SpiProj.schema.combine / a: {a} / b: {b} / result: {result |> Lib.SpiralSm.replace "\\" "|"} / result': {result'}""") _locals
                     result'
             with e ->
                 raise (SchemaException(r,e.Message))
@@ -203,19 +203,19 @@ let schema (pdir,text) : SchemaResult = config text |> Result.bind (fun x ->
             match x.packageDir with
             | Some(r,_ as x) -> Some r, combine pdir x
             | None -> None, Path.Combine(pdir,"..") |> Path.GetFullPath
-        trace Verbose (fun () -> $"""SpiProj.schema / pdir: {pdir} / module_dir: {module_dir |> snd} / package_dir: {package_dir |> snd |> Lib.SpiralSm.replace "\\" "|"}""") _locals
+        // trace Verbose (fun () -> $"""SpiProj.schema / pdir: {pdir} / module_dir: {module_dir |> snd} / package_dir: {package_dir |> snd |> Lib.SpiralSm.replace "\\" "|"}""") _locals
         let modules =
             let rec loop prefix = function
                 | RawFileHierarchy.Directory(r,(r',a),l) -> 
                     let prefix = Path.Combine(prefix,a)
-                    let prefix' = prefix |> Lib.SpiralFileSystem.normalize_path
+                    let prefix' = prefix |> Lib.SpiralFileSystem.standardize_path
                     trace Verbose (fun () -> $"SpiProj.schema.modules.loop | RawFileHierarchy.Directory(r,(r',a),l) / prefix: {prefix} / prefix': {prefix'}") _locals
                     let prefix = prefix'
                     Directory(r,(r',prefix),a,List.map (loop prefix) l)
                 | RawFileHierarchy.File(r,(r',a),is_top_down,is_include) ->
                     let path = Path.Combine(prefix,a + if is_top_down then ".spi" else ".spir")
-                    let path' = path |> Lib.SpiralFileSystem.normalize_path
-                    trace Verbose (fun () -> $"SpiProj.schema.modules.loop | RawFileHierarchy.File(r,(r',a),is_top_down,is_include) / path: {path} / path': {path'}") _locals
+                    let path' = path |> Lib.SpiralFileSystem.standardize_path
+                    // trace Verbose (fun () -> $"SpiProj.schema.modules.loop | RawFileHierarchy.File(r,(r',a),is_top_down,is_include) / path: {path} / path': {path'}") _locals
                     let path = path'
                     File(r,(r',path),if is_include then None else Some a)
             List.map (loop (snd module_dir)) x.modules
@@ -224,9 +224,10 @@ let schema (pdir,text) : SchemaResult = config text |> Result.bind (fun x ->
             x.packages |> List.map (fun x ->
                 let name = if x.is_include then None else Some x.name
                 let dir = Path.Combine((if x.is_in_compiler_dir then cdir else snd package_dir),x.name)
-                let dir' = dir |> Lib.SpiralFileSystem.normalize_path
-                trace Verbose (fun () -> $"""SpiProj.schema.packages / dir: {dir |> Lib.SpiralSm.replace "\\" "|"} / dir': {dir'}""") _locals
-                let dir = dir'
+                let dir' = dir |> Lib.SpiralFileSystem.standardize_path
+                let dir'' = dir' |> Lib.SpiralFileSystem.standardize_path
+                trace Verbose (fun () -> $"""SpiProj.schema.packages / dir: {dir |> Lib.SpiralSm.replace "\\" "|"} / dir': {dir'} / dir'': {dir''}""") _locals
+                let dir = dir''
                 {name = name; dir = x.range, dir}
                 )
         Result.Ok {moduleDir = module_dir; modules = modules; packageDir = package_dir; packages = packages}
