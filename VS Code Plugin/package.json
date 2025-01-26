@@ -159,10 +159,10 @@
 	},
 	"scripts": {
 		"outdated-pre": "npm-check-updates --target greatest",
-		"_vscode:prepublish": "~/.bun/bin/bun esbuild-base -- --minify",
+		"_vscode:prepublish": "~/.bun/bin/bun --bun esbuild-base -- --minify",
 		"esbuild-base": "~/.bun/bin/bunx --bun esbuild ./src/index.ts --bundle --outfile=out/index.js --external:vscode --format=cjs --platform=node",
-		"esbuild": "~/.bun/bin/bun esbuild-base -- --sourcemap",
-		"esbuild-watch": "~/.bun/bin/bun esbuild-base -- --sourcemap --watch",
+		"esbuild": "~/.bun/bin/bun --bun esbuild-base -- --sourcemap",
+		"esbuild-watch": "~/.bun/bin/bun --bun esbuild-base -- --sourcemap --watch",
 		"test-compile": "tsc -p ./"
 	},
 	"keywords": [
