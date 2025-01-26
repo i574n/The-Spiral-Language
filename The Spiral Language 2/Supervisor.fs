@@ -255,7 +255,12 @@ let dir uri =
     trace Verbose (fun () -> $"Supervisor.dir / uri: {uri} / result: {result} / result': {result'}") _locals
     result'
 let file uri =
-    let result = FileInfo(Uri(uri).LocalPath).FullName
+    let result =
+        try
+            FileInfo(Uri(uri).LocalPath).FullName
+        with ex ->
+            trace Verbose (fun () -> $"Supervisor.file / uri: {uri} / ex: %A{ex}") _locals
+            uri
     let result' = result |> SpiralFileSystem.standardize_path
     // let result = result |> SpiralSm.replace "\\" "|"
     // trace Verbose (fun () -> $"Supervisor.file / uri: {uri} / result: {result} / result': {result'}") _locals
