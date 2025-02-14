@@ -481,18 +481,18 @@ let supervisor_server (default_env : Startup.DefaultEnv) atten (errors : Supervi
                                 | :? CodegenUtils.CodegenError as e -> BuildFatalError(e.Data1)
                                 | :? CodegenUtils.CodegenErrorWithPos as e -> BuildErrorTrace(show_trace s e.Data0 e.Data1)
                                 | ex ->
-                                if Directory.Exists traceDir then
-                                    let guid = DateTime.Now |> SpiralDateTime.new_guid_from_date_time
-                                    let trace_file = traceDir </> $"{guid}_error.json"
-                                    async {
-                                        try
-                                            do! $"{ex}" |> SpiralFileSystem.write_all_text_async trace_file
-                                        with ex ->
-                                            trace Critical (fun () -> $"Supervisor.supervisor_server.BuildFile.file_build / ex: {ex |> Sm.format_exception}") _locals
-                                    }
-                                    |> Async.Start
-                                trace Critical (fun () -> $"Supervisor.supervisor_server.BuildFile.file_build / ex: %A{ex}") _locals
-                                BuildFatalError(ex.Message)
+                                    if Directory.Exists traceDir then
+                                        let guid = DateTime.Now |> SpiralDateTime.new_guid_from_date_time
+                                        let trace_file = traceDir </> $"{guid}_error.json"
+                                        async {
+                                            try
+                                                do! $"{ex}" |> SpiralFileSystem.write_all_text_async trace_file
+                                            with ex ->
+                                                trace Critical (fun () -> $"Supervisor.supervisor_server.BuildFile.file_build / ex: {ex |> Sm.format_exception}") _locals
+                                        }
+                                        |> Async.Start
+                                    trace Critical (fun () -> $"Supervisor.supervisor_server.BuildFile.file_build / ex: %A{ex}") _locals
+                                    BuildFatalError(ex.Message)
                         | None -> BuildFatalError $"Cannot find `main` in file {Path.GetFileNameWithoutExtension file}."
 
                     // The partial evaluator is using too much stack space, so as a temporary fix, I am running it on a separate thread with much more of it.
@@ -696,6 +696,7 @@ let [<EntryPoint>] main args =
     app.MapHub<SpiralHub> "" |> ignore
 
     use _ = Eval.startTokenRangeWatcher ()
+    spiral_compiler.startParentWatcher ()
     use _ = Eval.startCommandsWatcher uri_server
 
     printfn $"Starting the Spiral Server. It is bound to: {uri_server}"

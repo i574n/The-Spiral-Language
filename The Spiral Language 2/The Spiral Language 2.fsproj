@@ -46,6 +46,7 @@
     <Compile Include="../../../lib/fsharp/Runtime.fs" />
     <Compile Include="../../../lib/fsharp/FileSystem.fs" />
     <Compile Include="../../../apps/builder/Builder.fs" />
+    <Compile Include="../../../deps/spiral/apps/compiler/spiral_compiler.fs" />
     <Compile Include="../../../apps/spiral/Supervisor.fs" />
     <Compile Include="../../../apps/spiral/Eval.fs" />
 
