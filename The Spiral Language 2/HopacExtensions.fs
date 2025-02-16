@@ -1,3 +1,6 @@
 ﻿module Hopac.Infixes
 
-let (>>**) x f = if Hopac.Promise.Now.isFulfilled x then f (Hopac.Promise.Now.get x) else Hopac.Infixes.(>>=*) x f
+let (>>**) x f =
+    if x |> Hopac.Promise.Now.isFulfilled
+    then x |> Hopac.Promise.Now.get |> f
+    else Hopac.Infixes.(>>=*) x f
