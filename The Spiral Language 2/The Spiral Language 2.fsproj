@@ -8,6 +8,8 @@
     <RootNamespace>The_Spiral_Language_2</RootNamespace>
     <OutputType>Exe</OutputType>
     <AssemblyName>Spiral</AssemblyName>
+    <ServerGarbageCollection>true</ServerGarbageCollection>
+    <ConcurrentGarbageCollection>true</ConcurrentGarbageCollection>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|AnyCPU'">
