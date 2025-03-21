@@ -9,9 +9,6 @@ open Spiral.Startup
 open Spiral.BlockParsing
 open Spiral.PartEval.Prepass
 open Spiral.HashConsing
-open SoftCircuits.Collections
-open Polyglot.Common
-open Lib
 
 type Tag = int
 type [<CustomComparison;CustomEquality>] L<'a,'b when 'a: equality and 'a: comparison> = 
@@ -2581,9 +2578,9 @@ let peval (env : TopEnv) (x : E) =
         | EOp(_,HashMapTryGet,[h;k]) ->
             match term s h, term s k with
             | DHashMap(h, _), k ->
-                match h.TryGetValue(k) with
-                | true, v -> v
-                | false, _ -> DSymbol "null"
+                if k |> h.ContainsKey
+                then k |> h.GetValueOrDefault
+                else DSymbol "null"
             | h, _ -> raise_type_error s $"Expected a compile time HashMap.\nGot: {show_data h}"
         | EOp(_,StaticStringConcat,[l]) ->
             let strb = System.Text.StringBuilder()
