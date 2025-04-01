@@ -105,7 +105,7 @@ type JoinPointCall = JoinPointKey * TyV []
 
 type CodeMacro =
     | CMText of string
-    | CMTerm of Data
+    | CMTerm of Data * is_inline : bool
     | CMType of Ty
     | CMTypeLit of Ty
 
@@ -1148,9 +1148,9 @@ let peval (env : TopEnv) (x : E) =
             match backend with
             | None -> push_typedop_no_rewrite s (TyJoinPoint(JPMethod((backend',body),join_point_key),call_args)) ret_ty
             | Some (range,_) ->
-                let method_name = push_typedop_no_rewrite s (TyBackend((backend',body),join_point_key,range)) (YPrim Int32T)
+                let _ = push_typedop_no_rewrite s (TyBackend((backend',body),join_point_key,range)) YB
                 let call_args = Array.foldBack (fun v s -> DPair(DV v,s)) call_args DB
-                DPair(method_name, call_args)
+                call_args
         | EDefaultLit(r,a,b) -> let s = add_trace s r in default_lit s a (ty s b) |> DLit
         | EType(r,_) -> raise_type_error (add_trace s r) "Raw types are not allowed on the term level."
         | EApply(r,a,b) -> let s = add_trace s r in apply s (term s a, term s b)
@@ -1281,7 +1281,7 @@ let peval (env : TopEnv) (x : E) =
             else raise_type_error s <| sprintf "The two side do not have the same type.\nGot: %s\nExpected: %s" (show_ty c_ty') (show_ty c_ty)
         | EMacro(r,a,b) ->
             let s = add_trace s r
-            let a = a |> List.map (function MText x -> CMText x | MTerm x -> CMTerm(term s x |> dyn false s) | MType x -> CMType(ty s x) | MLitType x -> CMTypeLit(ty s x |> assert_ty_lit s))
+            let a = a |> List.map (function MText x -> CMText x | MTerm (x,b) -> CMTerm(term s x |> dyn false s, b) | MType x -> CMType(ty s x) | MLitType x -> CMTypeLit(ty s x |> assert_ty_lit s))
             push_typedop_no_rewrite s (TyMacro(a)) (ty s b)
         | EPrototypeApply(_,prot_id,b) ->
             let rec loop = function
@@ -1533,26 +1533,28 @@ let peval (env : TopEnv) (x : E) =
             | a -> raise_type_error s <| sprintf "Expected an i32 literal.\nGot: %s" (show_data a)
         | EOp(_,PragmaUnrollPop,[]) -> 
             push_op_no_rewrite' s PragmaUnrollPop [] YB
-        | EOp(_,BackendSwitch,l) ->
+        | EOp(_,BackendSwitch,[a]) ->
             let mutable t = None
             let mutable d = None
             let validate_type t' =
                 match t with
                 | Some t -> if t <> t' then raise_type_error s $"The backend switch needs to have the same type for all of its branches.\nGot: {show_ty t'}\nExpected: {show_ty t}"
                 | None -> t <- Some t'
-            l |> List.iter (function
-                | EPair(_,ELit(_,LitString backend),b) -> 
+            match term s a with
+            | DRecord l ->
+                l |> Map.iter (fun backend b ->
                     // The reason why we're evaling all the branches intead of just one and in this specific order is because otherwise
                     // compile time hashmaps could make type inference unsound.
                     if backend = s.backend.node then 
-                        let d' = term s b
+                        let d' = apply s (b, DB)
                         validate_type (data_to_ty s d')
                         d <- Some d'
                     else
-                        let _,t' = term_scope s b
-                        validate_type t'
-                | _ -> raise_type_error s "BackendSwitch should be a list of (string literal,body) pairs."
+                        let s = {s with seq=ResizeArray(); cse=Dictionary HashIdentity.Structural :: s.cse; backend=backend_strings.Add backend}
+                        let d' = apply s (b, DB)
+                        validate_type (data_to_ty s d')
                 )
+            | a -> raise_type_error s <| sprintf "Expected an record.\nGot: %s" (show_data a)
             match d with
             | Some cur -> cur |> dyn true s
             | None -> raise_type_error s $"Cannot find the backend {s.backend.node} in the backend switch op."

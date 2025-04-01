@@ -1,4 +1,5 @@
 module Spiral.Codegen.Fsharp
+#nowarn 40
 
 open Spiral
 open Spiral.Tokenize
@@ -98,12 +99,12 @@ let codegen (env : PartEvalResult) (x : TypedBind []) =
         let f x : LayoutRec = 
             match x with
             | YLayout(x,_) ->
-            let x = env.ty_to_data x
-            let a, b =
-                match x with
-                | DRecord a -> let a = Map.map (fun _ -> data_free_vars) a in a |> Map.toArray |> Array.collect snd, a
-                | _ -> data_free_vars x, Map.empty
-            {data=x; free_vars=a; free_vars_by_key=b; tag=dict'.Count}
+                let x = env.ty_to_data x
+                let a, b =
+                    match x with
+                    | DRecord a -> let a = Map.map (fun _ -> data_free_vars) a in a |> Map.toArray |> Array.collect snd, a
+                    | _ -> data_free_vars x, Map.empty
+                {data=x; free_vars=a; free_vars_by_key=b; tag=dict'.Count}
             | _ -> raise_codegen_error $"Compiler error: Expected a layout type (3).\nGot: %s{show_ty x}"
         fun x ->
             let mutable dirty = false
@@ -131,6 +132,7 @@ let codegen (env : PartEvalResult) (x : TypedBind []) =
 
     let args x = x |> Array.map (fun (L(i,_)) -> sprintf "v%i" i) |> String.concat ", "
     let show_w = function WV (L(i,_)) -> sprintf "v%i" i | WLit a -> lit a
+    let args' x = x |> data_term_vars |> Array.map show_w |> String.concat ", "
 
     let global' =
         let has_added = HashSet env.globals
@@ -219,7 +221,7 @@ let codegen (env : PartEvalResult) (x : TypedBind []) =
             | _ -> raise_codegen_error "Compiler error: Expected an int in length"
             |> simple
         match a with
-        | TyMacro a -> a |> List.map (function CMText x -> x | CMTerm x -> tup x | CMType x -> tup_ty x | CMTypeLit x -> type_lit x) |> String.concat "" |> simple
+        | TyMacro a -> a |> List.map (function CMText x -> x | CMTerm (x,inl) -> (if inl then args' x else tup x) | CMType x -> tup_ty x | CMTypeLit x -> type_lit x) |> String.concat "" |> simple
         | TySizeOf t -> simple $"sizeof<{tup_ty t}>"
         | TyIf(cond,tr,fl) ->
             complex <| fun s ->
