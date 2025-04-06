@@ -1,7 +1,7 @@
 {
 	"name": "spiral-lang-vscode-i574n",
 	"displayName": "The Spiral Language (i574n)",
-	"version": "2.15.17",
+	"version": "2.15.19",
 	"description": "[Notebooks Fork] VS Code editor support plugin + the Spiral language compiler.",
 	"repository": {
 		"url": "https://github.com/i574n/The-Spiral-Language"
