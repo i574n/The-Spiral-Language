@@ -9,6 +9,7 @@ open Spiral.Startup
 open Spiral.BlockParsing
 open Spiral.PartEval.Prepass
 open Spiral.HashConsing
+open Polyglot.Common
 
 type Tag = int
 type [<CustomComparison;CustomEquality>] L<'a,'b when 'a: equality and 'a: comparison> = 
@@ -1542,7 +1543,7 @@ let peval (env : TopEnv) (x : E) =
                 | None -> t <- Some t'
             match term s a with
             | DRecord l ->
-                l |> Map.iter (fun backend b ->
+                l |> Map.iter (fun (_, backend) b ->
                     // The reason why we're evaling all the branches intead of just one and in this specific order is because otherwise
                     // compile time hashmaps could make type inference unsound.
                     if backend = s.backend.node then 
@@ -2458,15 +2459,29 @@ let peval (env : TopEnv) (x : E) =
                 | _ -> push_op s UnionTag a (YPrim Int32T)
             | DNominal(DUnion(DPair(DSymbol k,_),h), _) -> eval k h
             | a -> raise_type_error s <| sprintf "Expected an union.\nGot: %s" (show_data a)
-        | EOp(_,Global & op,[a]) ->
-            match term s a with
+        | EOp(_,Global & op,[a']) ->
+            match term s a' with
             | DLit (LitString text) & a ->
                 // if text.Contains "import " || text.Contains "Fable" then
                 //     let s = { s with trace = []; seq = ResizeArray() }
                 //     let l = s.cse |> List.map _.Count |> List.filter ((=) 0) |> List.length
                 //     Console.WriteLine ($"global / text: {text} / s: %A{s} / l: {l}")
-                if s.i.contents < 2 && s.cse |> List.map _.Count |> List.filter ((=) 0) |> List.length = 2
-                then global' text
+                let cse_counts = s.cse |> List.map _.Count |> List.filter ((=) 0) |> List.length
+                let x_ =
+                    s.backend.node = env.backend
+                    && s.i.contents < 2
+                    && (cse_counts = 2 || cse_counts = 3)
+                if text.Contains "std_path_PathBuf"
+                    || text.Contains "std_path_Display"
+                    || text.Contains "regex_Regex"
+                    || text.Contains "VarError"
+                    then
+                    trace Verbose (fun () -> $"PartEval.peval / | EOp(_,Global & op,[a]) -> / s.i.contents: %A{s.i.contents} / s.cse.count: %A{s.cse |> List.map _.Count} / s.backend.node: %A{s.backend.node} / op: %A{op} / a': %A{a'} / env.backend: %A{env.backend} / x_: %A{x_} / text: %A{text}") _locals
+                if s.backend.node = env.backend then
+                    // trace Verbose (fun () -> $"PartEval.peval / | EOp(_,Global & op,[a]) -> / s.i.contents: %A{s.i.contents} / s.cse.count: %A{s.cse |> List.map _.Count} / s.backend.node: %A{s.backend.node} / op: %A{op} / a': %A{a'} / env.backend: %A{env.backend} / x_: %A{x_} / text: %A{text}") _locals
+                // && s.i.contents < 2
+                // && s.cse |> List.map _.Count |> List.filter ((=) 0) |> List.length = 2
+                    global' text
                 push_op_no_rewrite s op a YB
             | a -> raise_type_error s $"Expected a string literal.\nGot: {show_data a}"
         | EOp(_,ToPythonRecord,[a]) ->

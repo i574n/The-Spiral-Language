@@ -172,7 +172,7 @@ let codegen (env : PartEvalResult) (x : TypedBind []) =
         fun () -> let x = i in i <- i + 1u; x
 
     let global' =
-        let has_added = HashSet()
+        let has_added = HashSet env.globals
         fun x -> if has_added.Add(x) then globals.Add x
 
     let import x = global' $"#include <{x}>"

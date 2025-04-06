@@ -76,7 +76,7 @@ let proj_revalidate_owner default_env s file =
             let x_ = x
             let x = {| FullName = x' |}
             if Map.containsKey x.FullName s.packages then proj_validate default_env s (HashSet [x.FullName])
-        elif File.Exists(spiproj_suffix x.FullName) then proj_open default_env s (x.FullName,None)
+            elif File.Exists(spiproj_suffix x.FullName) then proj_open default_env s (x.FullName,None)
             else loop x_.Parent
     loop (Directory.GetParent(file))
 
@@ -359,7 +359,7 @@ let supervisor_server (default_env : Startup.DefaultEnv) atten (errors : Supervi
             s
         | FileTokenRange(x, res) -> 
             let v =
-            match Map.tryFind (file x.uri) s.modules with
+                match Map.tryFind (file x.uri) s.modules with
                 | Some v -> Some v
                 | None when x.uri |> SpiralSm.ends_with ".dib" ->
                     x.uri
@@ -403,8 +403,8 @@ let supervisor_server (default_env : Startup.DefaultEnv) atten (errors : Supervi
                     x >>= function
                     | Nil -> go_hover s
                     | Cons((_,x,_),b) ->
-                        let _locals () = $"b: {b}"
-                        trace Verbose (fun () -> $"Supervisor.supervisor_server.HoverAt.go_block.loop Cons") _locals
+                        // let _locals () = $"b: {b}"
+                        // trace Verbose (fun () -> $"Supervisor.supervisor_server.HoverAt.go_block.loop Cons") _locals
                         if x.offset <= pos.line then loop (Some x) b
                         // If the block is over the offset that means the previous one must be the right choice.
                         else go_hover s

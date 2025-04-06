@@ -185,7 +185,7 @@ let codegen' backend_handler (part_eval_env : PartEvalResult) (code_env : codege
         fun () -> let x = i in i <- i + 1u; x
 
     let global' =
-        let has_added = HashSet()
+        let has_added = HashSet code_env.globals
         fun x -> if has_added.Add(x) then code_env.globals.Add x
 
     let import x = global' $"#include <{x}>"
@@ -341,7 +341,7 @@ let codegen' backend_handler (part_eval_env : PartEvalResult) (code_env : codege
             | HeapMutable -> sprintf "sptr<Mut%i>" (mut a).tag
             | StackMutable -> sprintf "StackMut%i &" (stack_mut a).tag
         | YMacro [Text "backend_switch "; Type (YRecord r)] ->
-            match r |> Map.tryPick (fun (_, k) v -> if k = code_env.backend then Some v else None) with
+            match r |> Map.tryPick (fun (_, k) v -> if k = code_env.backend_name then Some v else None) with
             | Some x -> tup_ty x
             | None -> raise_codegen_error $"In the backend_switch, expected a record with the '{code_env.backend_name}' field."
         | YMacro a -> a |> List.map (function Text a -> a | Type a -> tup_ty a | TypeLit a -> type_lit a) |> String.concat ""

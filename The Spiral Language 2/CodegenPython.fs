@@ -103,7 +103,7 @@ let line x s = if s <> "" then x.text.Append(' ', x.indent).AppendLine s |> igno
 
 let codegen' backend_handler (part_eval_env : PartEvalResult) (code_env : Cpp.codegen_env) =
     let global' =
-        let has_added = HashSet()
+        let has_added = HashSet code_env.globals
         fun x -> if has_added.Add(x) then code_env.globals.Add x
 
     let import x = global' $"import {x}"
@@ -481,9 +481,9 @@ let codegen' backend_handler (part_eval_env : PartEvalResult) (code_env : Cpp.co
     import "numpy as np"
     from "dataclasses import dataclass"
     from "typing import NamedTuple, Union, Callable, Tuple"
-    env.globals.Add "i8 = int; i16 = int; i32 = int; i64 = int; u8 = int; u16 = int; u32 = int; u64 = int; f32 = float; f64 = float; char = str; string = str"
-    env.globals.Add "cuda = False"
-    env.globals.Add ""
+    code_env.globals.Add "i8 = int; i16 = int; i32 = int; i64 = int; u8 = int; u16 = int; u32 = int; u64 = int; f32 = float; f64 = float; char = str; string = str"
+    code_env.globals.Add "cuda = False"
+    code_env.globals.Add ""
 
     let s = {text=StringBuilder(); indent=0}
     
@@ -541,7 +541,7 @@ let codegen (default_env : Startup.DefaultEnv) (file_path : string) part_eval_en
         StringBuilder()
             .AppendLine("kernels_aux = r\"\"\"")
             .AppendLine(aux_library_code_cuda)
-        .AppendLine("\"\"\"")
+            .AppendLine("\"\"\"")
             .AppendLine(aux_library_code_python)
             .ToString()
     let code_main = 
@@ -555,7 +555,7 @@ let codegen (default_env : Startup.DefaultEnv) (file_path : string) part_eval_en
             .AppendLine("\"\"\"")
             .AppendLine($"from {file_name}_auto import *")
             .AppendLine("kernels = kernels_aux + kernels_main")
-            .Append(append_lines host_code_env.globals)
+            .Append(part_eval_env.globals |> Seq.append host_code_env.globals |> Seq.distinct |> append_lines)
             .AppendJoin("", host_code_env.fwd_dcls)
             .AppendJoin("", host_code_env.types)
             .AppendJoin("", host_code_env.functions)
