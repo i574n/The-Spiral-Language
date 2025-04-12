@@ -1,22 +1,23 @@
 $WarningPreference = 'SilentlyContinue'; $ErrorActionPreference = "Stop"; Set-StrictMode -Version Latest
 
-$prerelease_flag = $true
+param (
+    [bool]$Prerelease = $false,
+    [string]$Rank = "patch" # Can also be "minor" and "major"
+)
+
 # TODO: Need to test whether this works.
-$prerelease = if ($prerelease) { "--prerelease" } else { "" }
+$prerelease_arg = if ($Prerelease) { "--prerelease" } else { "" }
 
 try {
     $keys = Get-Content -Raw -Path .\keys.json | ConvertFrom-Json
     function Publish-Vsce {
-        param (
-            [string] $Rank = "patch" # Can also be "minor" and "major"
-        )
         Write-Host "Publishing on VSCE."
-        npx "@vscode/vsce" publish $Rank $prerelease # https://marketplace.visualstudio.com/items?itemName=mrakgr.spiral-lang-vscode
+        npx "@vscode/vsce" publish $Rank $prerelease_arg # https://marketplace.visualstudio.com/items?itemName=mrakgr.spiral-lang-vscode
     }
     
     function Publish-Ovsx {
         Write-Host "Publishing on OVSX."
-        npx ovsx publish -p $keys.ovsx $prerelease # https://open-vsx.org/extension/mrakgr/spiral-lang-vscode
+        npx ovsx publish -p $keys.ovsx $prerelease_arg # https://open-vsx.org/extension/mrakgr/spiral-lang-vscode
     }
 
     $files = @(
@@ -27,7 +28,7 @@ try {
         Copy-Item ../$file .
     }
     
-    Publish-Vsce -Rank "patch"
+    Publish-Vsce
     Publish-Ovsx
 }
 finally {
