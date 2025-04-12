@@ -12,6 +12,7 @@ New native Cuda backend and various features to support it have been added into 
 * The core libraries have been appropriately named. `reference_counting.cuh` has been changed to `corelib.cuh`, and `reference_counting.py` has been changed to `corelib.py`.
 * Fixed the compilation of Cuda virtual closure destructors on the device.
 * TODO: Replace the 3rd party lib OrderedDictionary with the inbuilt one in .NET 9.
+* TODO: Test whether the prerelease mode works.
 
 2.15.6 (12/1/2024)
 
