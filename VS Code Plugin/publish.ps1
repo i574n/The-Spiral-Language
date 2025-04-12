@@ -6,7 +6,7 @@ param (
 )
 
 # TODO: Need to test whether this works.
-$prerelease_arg = if ($Prerelease) { "--pre-release" } else { "" }
+$prerelease_arg = if ($Prerelease) { "--pre-release" } else { $null }
 
 try {
     $keys = Get-Content -Raw -Path .\keys.json | ConvertFrom-Json
