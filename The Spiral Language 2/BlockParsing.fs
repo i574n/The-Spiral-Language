@@ -42,6 +42,7 @@ type Op =
     | PragmaUnrollPop
     
     // Backend branching
+    | UnsafeBackendSwitch
     | BackendSwitch
 
     // Reordering check
