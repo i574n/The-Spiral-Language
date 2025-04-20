@@ -9,7 +9,6 @@ open Spiral.Startup
 open Spiral.BlockParsing
 open Spiral.PartEval.Prepass
 open Spiral.HashConsing
-open SoftCircuits.Collections
 
 type Tag = int
 type [<CustomComparison;CustomEquality>] L<'a,'b when 'a: equality and 'a: comparison> = 
