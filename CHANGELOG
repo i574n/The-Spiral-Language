@@ -11,7 +11,7 @@ New native Cuda backend and various features to support it have been added into 
 * The `default_int` and `default_uint` in `corelib.cuh` are automatically replaced at compile time with the actual defaults.
 * The core libraries have been appropriately named. `reference_counting.cuh` has been changed to `corelib.cuh`, and `reference_counting.py` has been changed to `corelib.py`.
 * Fixed the compilation of Cuda virtual closure destructors on the device by generating the programmatically instead of having them be default. Note: Will revert this change after Nvidia fixes their compiler. I got note saying they would in the next major release.
-* Replace the 3rd party lib OrderedDictionary with the inbuilt one in .NET 9.
+* Replaced the 3rd party lib OrderedDictionary with the inbuilt one in .NET 9.
 * Added the `UnsafeBackendSwitch` operation to the language. Only use it if it won't result in type inconsistencies.
 * TODO: Test whether the prerelease mode works.
 
