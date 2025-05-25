@@ -864,13 +864,8 @@ let codegen' backend_handler (part_eval_env : PartEvalResult) (code_env : codege
         import "thrust/device_vector.h"
 
         let s = {text=StringBuilder(); indent=0}
-        line s $"{ret_ty} main_body() {{"
+        line s $"{ret_ty} main() {{"
         binds_start (indent s) x
-        line s "}"
-        line s $"{ret_ty} main(){{"
-        line (indent s) "auto r = main_body();"
-        line (indent s) "gpuErrchk(cudaDeviceSynchronize()); // This line is here so the `__trap()` calls on the kernel aren't missed."
-        line (indent s) "return r;"
         line s "}"
         code_env.main_defs.Add(s.text.ToString())
     | ArgsCudaDevice(vs,x) ->
