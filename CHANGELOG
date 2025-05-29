@@ -1,6 +1,6 @@
 2.16.0 (WIP)
 
-New native Cuda backend and various features to support it have been added into the language.
+New native Cuda backend and various features to support it have been added into the language. Also the .NET SDK has been bumped to 9.
 
 * Added the host/device Cuda C++ backend.
 * Changed the data that backend join points return.
@@ -10,7 +10,11 @@ New native Cuda backend and various features to support it have been added into 
 * `new`, `assert.h` and `stdio.h` headers are now automatically imported in the core library. An `#ifndef` is placed to ensure compatibility with NVRTC.
 * The `default_int` and `default_uint` in `corelib.cuh` are automatically replaced at compile time with the actual defaults.
 * The core libraries have been appropriately named. `reference_counting.cuh` has been changed to `corelib.cuh`, and `reference_counting.py` has been changed to `corelib.py`.
-* Fixed the compilation of Cuda virtual closure destructors on the device.
+* Fixed the compilation of Cuda virtual closure destructors on the device by generating the programmatically instead of having them be default. Note: Will revert this change after Nvidia fixes their compiler. I got note saying they would in the next major release.
+* Replaced the 3rd party lib OrderedDictionary with the inbuilt one in .NET 9.
+* Added the `UnsafeBackendSwitch` operation to the language. Only use it if it won't result in type inconsistencies.
+* Remove the `main_body` from both the native Cuda and Python backends. The device sync was causing screen flickering and system instability due to premature frees when combined with a debugger. It's be best that device sync be done manually after all.
+* TODO: Test whether the prerelease mode works.
 
 2.15.6 (12/1/2024)
 

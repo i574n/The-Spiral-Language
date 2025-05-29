@@ -20,58 +20,63 @@
 ---
 <!-- TOC -->
 
-- [Date: 7/28/2024 - Higher Ranked Types have been added to the language](#date-7282024---higher-ranked-types-have-been-added-to-the-language)
-- [Date: 7/5/2024 - GADTs have been added to the language](#date-752024---gadts-have-been-added-to-the-language)
-- [Date: 6/17/2024 - The Python + Cuda backend now supports all of Spiral's featues](#date-6172024---the-python--cuda-backend-now-supports-all-of-spirals-featues)
-- [Date: 3/30/2024 - Added existentials to the language](#date-3302024---added-existentials-to-the-language)
-- [Date: 8/27/2023 - Check out the Spiral playlist on Youtube](#date-8272023---check-out-the-spiral-playlist-on-youtube)
+    - [Date: WIP/2025 - Native Cuda has been added to the language. Upgraded the project to .NET 9.](#date-wip2025---native-cuda-has-been-added-to-the-language-upgraded-the-project-to-net-9)
+    - [Date: 7/28/2024 - Higher Ranked Types have been added to the language](#date-7282024---higher-ranked-types-have-been-added-to-the-language)
+    - [Date: 7/5/2024 - GADTs have been added to the language](#date-752024---gadts-have-been-added-to-the-language)
+    - [Date: 6/17/2024 - The Python + Cuda backend now supports all of Spiral's featues](#date-6172024---the-python--cuda-backend-now-supports-all-of-spirals-featues)
+    - [Date: 3/30/2024 - Added existentials to the language](#date-3302024---added-existentials-to-the-language)
+    - [Date: 8/27/2023 - Check out the Spiral playlist on Youtube](#date-8272023---check-out-the-spiral-playlist-on-youtube)
 - [Date: 1/7/2023 - UPMEM demo \& backend](#date-172023---upmem-demo--backend)
-- [Date: 12/21/2022 - Python backend](#date-12212022---python-backend)
-- [Date: 7/13/2022 - C backend](#date-7132022---c-backend)
-- [Date: 8/21/2021 - Updated the docs](#date-8212021---updated-the-docs)
-- [Overview](#overview)
-- [Getting Spiral](#getting-spiral)
-- [Status in 8/17/2021](#status-in-8172021)
+    - [Date: 12/21/2022 - Python backend](#date-12212022---python-backend)
+    - [Date: 7/13/2022 - C backend](#date-7132022---c-backend)
+    - [Date: 8/21/2021 - Updated the docs](#date-8212021---updated-the-docs)
+    - [Overview](#overview)
+    - [Getting Spiral](#getting-spiral)
+    - [Status in 8/17/2021](#status-in-8172021)
 - [Projects \& Packages](#projects--packages)
-- [Top-Down Segment](#top-down-segment)
-  - [Compilation](#compilation)
-  - [Basics](#basics)
-  - [Join points](#join-points)
-    - [Join points and language interop](#join-points-and-language-interop)
-  - [Functions](#functions)
-  - [What triggers dyning?](#what-triggers-dyning)
-  - [Macros](#macros)
-  - [Layout types](#layout-types)
-  - [Nominals](#nominals)
-  - [Symbols](#symbols)
-    - [Records](#records)
-    - [Unions](#unions)
-  - [Type Literals](#type-literals)
+    - [Top-Down Segment](#top-down-segment)
+        - [Compilation](#compilation)
+        - [Basics](#basics)
+        - [Join points](#join-points)
+            - [Join points and language interop](#join-points-and-language-interop)
+        - [Functions](#functions)
+        - [What triggers dyning?](#what-triggers-dyning)
+        - [Macros](#macros)
+        - [Layout types](#layout-types)
+        - [Nominals](#nominals)
+        - [Symbols](#symbols)
+            - [Records](#records)
+            - [Unions](#unions)
+        - [Type Literals](#type-literals)
     - [`v` operator in macros](#v-operator-in-macros)
-  - [Prototypes](#prototypes)
-  - [Existentials](#existentials)
-  - [GADTs](#gadts)
-  - [Higher Ranked Types](#higher-ranked-types)
-- [Heap Allocation vs Code Size](#heap-allocation-vs-code-size)
-- [Notes On Arrays](#notes-on-arrays)
-- [Bottom-Up Segment](#bottom-up-segment)
+        - [Prototypes](#prototypes)
+        - [Existentials](#existentials)
+        - [GADTs](#gadts)
+        - [Higher Ranked Types](#higher-ranked-types)
+    - [Heap Allocation vs Code Size](#heap-allocation-vs-code-size)
+    - [Notes On Arrays](#notes-on-arrays)
+    - [Bottom-Up Segment](#bottom-up-segment)
   - [Functions](#functions-1)
-  - [Branching](#branching)
-    - [Loop Unrolling](#loop-unrolling)
-    - [Compiler Crashing](#compiler-crashing)
-    - [Print Static](#print-static)
-  - [Type Inference In Bottom-Up Style](#type-inference-in-bottom-up-style)
-  - [Real Nominals And Inverse Arrays](#real-nominals-and-inverse-arrays)
-- [Special behaviors in the Cuda backend](#special-behaviors-in-the-cuda-backend)
+        - [Branching](#branching)
+            - [Loop Unrolling](#loop-unrolling)
+            - [Compiler Crashing](#compiler-crashing)
+            - [Print Static](#print-static)
+        - [Type Inference In Bottom-Up Style](#type-inference-in-bottom-up-style)
+        - [Real Nominals And Inverse Arrays](#real-nominals-and-inverse-arrays)
+    - [Special behaviors in the Cuda backend](#special-behaviors-in-the-cuda-backend)
   - [`noinline_` prefix in named join points](#noinline_-prefix-in-named-join-points)
   - [`v` variables in macros](#v-variables-in-macros)
-  - [Layout type indexing returns references](#layout-type-indexing-returns-references)
-  - [Stack mutable layout types](#stack-mutable-layout-types)
-- [Known Bugs](#known-bugs)
+        - [Layout type indexing returns references](#layout-type-indexing-returns-references)
+        - [Stack mutable layout types](#stack-mutable-layout-types)
+    - [Known Bugs](#known-bugs)
 
 <!-- /TOC -->
 
 # News
+
+## Date: WIP/2025 - Native Cuda has been added to the language. Upgraded the project to .NET 9.
+
+As the title says. TODO.
 
 ## Date: 7/28/2024 - Higher Ranked Types have been added to the language
 
@@ -154,7 +159,7 @@ Statically typed and with a lightweight, very powerful type system giving it exp
 
 ## Getting Spiral
 
-The language is published on the VS Code marketplace. Getting it is just a matter of installing the **The Spiral Language** plugin. This will install both the VS Code editor plugin and the compiler itself. The compiler itself requires the [.NET 8 SDK](https://dotnet.microsoft.com/en-us/download/dotnet/8.0) and is portable across platforms. The language server uses a websocket connection to communicate with the editor so allow it in the firewall.
+The language is published on the VS Code marketplace. Getting it is just a matter of installing the **The Spiral Language** plugin. This will install both the VS Code editor plugin and the compiler itself. The compiler itself requires the [.NET 9 SDK](https://dotnet.microsoft.com/en-us/download/dotnet/9.0) and is portable across platforms. The language server uses a websocket connection to communicate with the editor so allow it in the firewall.
 
 ## Status in 8/17/2021
 
@@ -2921,7 +2926,7 @@ As of v2.15.0, a new layout type has been added to the language.
 
 ```spiral
 inl main() : () =
-    inl _ = join_backend Cuda
+    inl _ = join_backend CudaDevice
         inl x = stack_mut {x = true; y = 1i32}
         inl _ = x.x, x.y
         x.x <- false

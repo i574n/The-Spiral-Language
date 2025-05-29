@@ -9,6 +9,7 @@ open Spiral.Startup
 open Spiral.BlockParsing
 open Spiral.PartEval.Prepass
 open Spiral.HashConsing
+
 open Polyglot.Common
 
 type Tag = int
@@ -1559,6 +1560,13 @@ let peval (env : TopEnv) (x : E) =
             match d with
             | Some cur -> cur |> dyn true s
             | None -> raise_type_error s $"Cannot find the backend {s.backend.node} in the backend switch op."
+        | EOp(_,UnsafeBackendSwitch,[a]) ->
+            match term s a with // Unsafe version of the backend switch. Shouldn't ever be mixed with type level computations and bottom up inference.
+            | DRecord l -> // Only use it if the code is backend agnostic.
+                match Map.tryFind s.backend.node l with
+                | Some b -> apply s (b, DB)
+                | None -> raise_type_error s $"Cannot find the backend {s.backend.node} in the backend switch op."
+            | a -> raise_type_error s <| sprintf "Expected an record.\nGot: %s" (show_data a)
         | EOp(_,UsesOriginalTermVars,[a;b]) ->
             let a = term s a |> data_term_vars'
             let b = term s b |> data_term_vars'

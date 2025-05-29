@@ -101,7 +101,7 @@ type BindsReturn =
 
 let line x s = if s <> "" then x.text.Append(' ', x.indent).AppendLine s |> ignore
 
-let codegen' backend_handler (part_eval_env : PartEvalResult) (code_env : Cpp.codegen_env) =
+let codegen' backend_handler (part_eval_env : PartEvalResult) (code_env : codegen_env) =
     let global' =
         let has_added = HashSet code_env.globals
         fun x -> if has_added.Add(x) then code_env.globals.Add x
@@ -155,8 +155,8 @@ let codegen' backend_handler (part_eval_env : PartEvalResult) (code_env : Cpp.co
             r
 
     let cupy_ty x = part_eval_env.ty_to_data x |> data_free_vars |> cupy_ty
-    let rec binds_start (args : TyV []) (s : CodegenEnv) (x : TypedBind []) = binds (RefCounting.refc_prepass Set.empty (Set args) x).g_decr s BindsTailEnd x
-    and binds g_decr (s : CodegenEnv) (ret : BindsReturn) (stmts : TypedBind []) = 
+    let rec binds_start (args : TyV []) (s : string_builder_env) (x : TypedBind []) = binds (RefCounting.refc_prepass Set.empty (Set args) x).g_decr s BindsTailEnd x
+    and binds g_decr (s : string_builder_env) (ret : BindsReturn) (stmts : TypedBind []) = 
         let s_len = s.text.Length
         let tup_destruct (a,b) =
             if 0 < Array.length a then
@@ -477,35 +477,29 @@ let codegen' backend_handler (part_eval_env : PartEvalResult) (code_env : Cpp.co
             )
 
     fun (x : TypedBind []) ->
-    import "cupy as cp"
+        import "cupy as cp"
     import "numpy as np"
-    from "dataclasses import dataclass"
-    from "typing import NamedTuple, Union, Callable, Tuple"
-    code_env.globals.Add "i8 = int; i16 = int; i32 = int; i64 = int; u8 = int; u16 = int; u32 = int; u64 = int; f32 = float; f64 = float; char = str; string = str"
+        from "dataclasses import dataclass"
+        from "typing import NamedTuple, Union, Callable, Tuple"
+        code_env.globals.Add "i8 = int; i16 = int; i32 = int; i64 = int; u8 = int; u16 = int; u32 = int; u64 = int; f32 = float; f64 = float; char = str; string = str"
     code_env.globals.Add "cuda = False"
-    code_env.globals.Add ""
+        code_env.globals.Add ""
 
-    let s = {text=StringBuilder(); indent=0}
-    
-    line s "def main_body():"
-    binds_start [||] (indent s) x
-    s.text.AppendLine() |> ignore
-
-    line s "def main():"
-    line (indent s) "r = main_body()"
-    line (indent s) "if cuda: cp.cuda.get_current_stream().synchronize() # This line is here so the `__trap()` calls on the kernel aren't missed."
-    line (indent s) "return r"
-    s.text.AppendLine() |> ignore
+        let s = {text=StringBuilder(); indent=0}
+        
+        line s "def main():"
+        binds_start [||] (indent s) x
+        s.text.AppendLine() |> ignore
 
     line s "if __name__ == '__main__': result = main(); None if result is None else print(result)"
-    code_env.main_defs.Add(s.text.ToString())
+        code_env.main_defs.Add(s.text.ToString())
 
 let codegen (default_env : Startup.DefaultEnv) (file_path : string) part_eval_env (x : TypedBind[]) = 
     let cuda_kernels = StringBuilder().AppendLine("kernel = r\"\"\"")
     let g = Dictionary(HashIdentity.Structural)
 
-    let host_code_env = Cpp.codegen_env.Create("Python", "")
-    let device_code_env = Cpp.codegen_env.Create("Cuda", "__device__ ")
+    let host_code_env = codegen_env.Create Python
+    let device_code_env = codegen_env.Create CudaDevice
 
     let cuda_codegen = 
         Cpp.codegen' (fun (jp_body,key,r') -> 
@@ -515,11 +509,11 @@ let codegen (default_env : Startup.DefaultEnv) (file_path : string) part_eval_en
         codegen' (fun (jp_body,key,r') ->
             let backend_name = (fst jp_body).node
             match backend_name with
-            | "Cuda" -> 
+            | "CudaDevice" -> 
                 Utils.memoize g (fun (jp_body,key & C(args,_)) ->
                     let args = rdata_free_vars args
                     match (fst part_eval_env.join_point_method.[jp_body]).[key] with
-                    | Some a, Some _, _ -> cuda_codegen (Cpp.Cuda(args,a))
+                    | Some a, Some _, _ -> cuda_codegen (Cpp.ArgsCudaDevice(args,a))
                     | _ -> raise_codegen_error "Compiler error: The method dictionary is malformed"
                     $"entry{g.Count}"
                     ) (jp_body,key)
