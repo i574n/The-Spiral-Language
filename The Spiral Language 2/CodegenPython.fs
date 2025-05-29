@@ -478,11 +478,11 @@ let codegen' backend_handler (part_eval_env : PartEvalResult) (code_env : codege
 
     fun (x : TypedBind []) ->
         import "cupy as cp"
-    import "numpy as np"
+        import "numpy as np"
         from "dataclasses import dataclass"
         from "typing import NamedTuple, Union, Callable, Tuple"
         code_env.globals.Add "i8 = int; i16 = int; i32 = int; i64 = int; u8 = int; u16 = int; u32 = int; u64 = int; f32 = float; f64 = float; char = str; string = str"
-    code_env.globals.Add "cuda = False"
+        code_env.globals.Add "cuda = False"
         code_env.globals.Add ""
 
         let s = {text=StringBuilder(); indent=0}
@@ -491,7 +491,7 @@ let codegen' backend_handler (part_eval_env : PartEvalResult) (code_env : codege
         binds_start [||] (indent s) x
         s.text.AppendLine() |> ignore
 
-    line s "if __name__ == '__main__': result = main(); None if result is None else print(result)"
+        line s "if __name__ == '__main__': result = main(); None if result is None else print(result)"
         code_env.main_defs.Add(s.text.ToString())
 
 let codegen (default_env : Startup.DefaultEnv) (file_path : string) part_eval_env (x : TypedBind[]) = 

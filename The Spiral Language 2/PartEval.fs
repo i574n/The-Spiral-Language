@@ -1563,7 +1563,8 @@ let peval (env : TopEnv) (x : E) =
         | EOp(_,UnsafeBackendSwitch,[a]) ->
             match term s a with // Unsafe version of the backend switch. Shouldn't ever be mixed with type level computations and bottom up inference.
             | DRecord l -> // Only use it if the code is backend agnostic.
-                match Map.tryFind s.backend.node l with
+                // match Map.tryFind s.backend.node l with
+                match Map.tryPick (fun (_, backend) b -> if backend = s.backend.node then Some b else None) l with
                 | Some b -> apply s (b, DB)
                 | None -> raise_type_error s $"Cannot find the backend {s.backend.node} in the backend switch op."
             | a -> raise_type_error s <| sprintf "Expected an record.\nGot: %s" (show_data a)
