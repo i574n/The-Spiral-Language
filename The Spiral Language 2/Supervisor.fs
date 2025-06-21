@@ -140,13 +140,7 @@ let attention_server (errors : SupervisorErrorSources) (req : _ Ch) =
                     next ers
 
         let loop_module (s : AttentionState) mpath (m : WDiff.ModuleState) =
-            let mpath' = mpath |> SpiralFileSystem.standardize_path
             let uri = Utils.file_uri mpath
-            trace Verbose (fun () -> $"Supervisor.attention_server.loop.loop_module / mpath: {mpath} / mpath': {mpath'} / uri: {uri}") _locals
-            let mpath = mpath'
-            
-
-            
             let interrupt x = loop (update {s with modules=push mpath s.modules} x)
             let rec bundler (r : BlockBundling.BlockBundleState) ers' = r >>= function
                 | Cons((_,x),rs) -> body uri interrupt x.errors ers' errors.parser (bundler rs)
@@ -211,8 +205,17 @@ let attention_server (errors : SupervisorErrorSources) (req : _ Ch) =
         match s.modules with
         | se,x :: xs -> 
             let s = {s with modules=Set.remove x se,xs}
+            let x' = x |> SpiralFileSystem.standardize_path
+            trace Verbose (fun () -> $"Supervisor.attention_server.loop / x: {x} / x': {x'}") _locals
             match Map.tryFind x s.supervisor.modules with
-            | Some v -> loop_module s x v
+            | Some v ->
+                let codeDir = x |> System.IO.Path.GetDirectoryName
+                let tokensPath = codeDir </> "tokens.json"
+                if tokensPath |> System.IO.File.Exists |> not
+                then loop_module s x v
+                else
+                    trace Verbose (fun () -> $"Supervisor.attention_server.loop / tokens found, skipping / x: {x}") _locals
+                    package s
             | None -> clear (Utils.file_uri x); package s
         | _,[] -> package s
 
