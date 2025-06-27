@@ -12,6 +12,8 @@ open System
 open System.Text
 open System.Collections.Generic
 
+open Lib
+
 let private backend_name = "Python"
 
 let lit = function
@@ -247,8 +249,8 @@ let codegen' backend_handler (part_eval_env : PartEvalResult) (code_env : codege
             // System.Console.WriteLine $"CodegenPython.TyMacro / a: %A{a}"
             a
             |> List.map (function
-                | CMText x when x |> Lib.SpiralSm.starts_with "$\"" ->
-                    let x = x |> Lib.SpiralSm.replace "%A{" "{"
+                | CMText x when x |> SpiralSm.starts_with "$\"" ->
+                    let x = x |> SpiralSm.replace "%A{" "{"
                     $"f\"{x.[2..]}"
                 | CMText x -> x
                 | CMTerm (x,inl) -> if inl then args' x else tup_data x

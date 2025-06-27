@@ -154,7 +154,7 @@ let attention_server (errors : SupervisorErrorSources) (req : _ Ch) =
             | (mpath,l) :: ls ->
                 let mpath' = mpath |> SpiralFileSystem.standardize_path
                 let uri = Utils.file_uri mpath
-                let pdir' = pdir |> Lib.SpiralFileSystem.standardize_path
+                let pdir' = pdir |> SpiralFileSystem.standardize_path
                 trace Verbose (fun () -> $"Supervisor.attention_server.loop.loop_package / mpath: {mpath} / mpath': {mpath'} / uri: {uri} / pdir: {pdir} / pdir': {pdir'}") _locals
                 let interrupt x = loop (update {s with packages=push pdir s.packages} x)
                 let rec typer (r : WDiff.TypecheckerStateValue Stream) ers' = r >>= function
@@ -191,7 +191,7 @@ let attention_server (errors : SupervisorErrorSources) (req : _ Ch) =
                             let rec loop x s = 
                                 match x with
                                 | WDiff.File(mid,path,_) ->
-                                    let path' = path |> Lib.SpiralFileSystem.standardize_path
+                                    let path' = path |> SpiralFileSystem.standardize_path
                                     trace Verbose (fun () -> $"Supervisor.attention_server.loop | WDiff.File(mid,path,_) / path: {path} / path': {path'}") _locals
                                     (path', (fst uids_file.[mid]).result) :: s
                                 | WDiff.Directory(_,_,l) -> list l s

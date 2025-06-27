@@ -9,6 +9,7 @@ open Graph
 open Spiral.SpiProj
 
 open Polyglot.Common
+open Lib
 
 
 type ProjectCodeAction = 
@@ -66,7 +67,7 @@ let ss_validate_module (packages : SchemaEnv) (modules : ModuleEnv) (x : SchemaS
             if Map.containsKey path packages then errors.Add(r,"Module directory has a package file in it.")
             list l
         | SpiProj.FileHierarchy.File(_,(r,path),_) ->
-            let path' = path |> Lib.SpiralFileSystem.standardize_path
+            let path' = path |> SpiralFileSystem.standardize_path
             trace Verbose (fun () -> $"ss_validate_module / file / path: {path} / path': {path'}") _locals
             if Map.containsKey path' modules = false then errors.Add(r,"Module not loaded.")
     and list l = List.iter loop l
@@ -113,7 +114,7 @@ type ProjEnvTCResult = ResultMap<PackageId,ProjStateTC>
 let wdiff_projenvr_sync_schema default_env funs_packages funs_files (ids : Map<string, PackageId>) (packages : SchemaEnv) 
         (state : ResultMap<PackageId,ProjState<'file_input,'file,'package>>) order =
     Array.fold (fun (s : ResultMap<_,_>) x ->
-        let x' = x |> Lib.SpiralFileSystem.standardize_path
+        let x' = x |> SpiralFileSystem.standardize_path
         trace Verbose (fun () -> $"ServerUtils.wdiff_projenvr_sync_schema / x: {x} / x': {x'}") _locals
         match Map.tryFind x' ids with
         | Some pid ->
@@ -134,7 +135,7 @@ let wdiff_projenvr_sync_schema default_env funs_packages funs_files (ids : Map<s
 let projenv_update_packages default_env funs_packages funs_files (ids : Map<string, PackageId>) (packages : SchemaEnv)
         (state : Map<PackageId,ProjState<'a,'b,'state>>)  (dirty_packages : Dictionary<_,_>, order : string []) =
     Array.foldBack (fun x l ->
-        let x' = x |> Lib.SpiralFileSystem.standardize_path
+        let x' = x |> SpiralFileSystem.standardize_path
         trace Verbose (fun () -> $"ServerUtils.projenv_update_packages / x: {x} / x': {x'}") _locals
         match Map.tryFind x' packages with
         | None -> l
@@ -167,7 +168,7 @@ let proj_file_from_schema (x : Schema) : ProjFiles =
         | FileHierarchy.File(_,(_,path),name) -> 
             let uid = num_files
             num_files <- num_files + 1
-            let path' = path |> Lib.SpiralFileSystem.standardize_path
+            let path' = path |> SpiralFileSystem.standardize_path
             trace Verbose (fun () -> $"ServerUtils.proj_file_from_schema / path: {path} / path': {path'}") _locals
             File(uid,path',name)
         | FileHierarchy.Directory(_,_,name,l) ->
@@ -187,7 +188,7 @@ let inline dirty_nodes_template funs (ids : Map<string, PackageId>) (packages : 
         (state : Map<PackageId,_>) (dirty_packages : string HashSet) =
     let d = Dictionary<string,_ [] * ProjFiles>()
     dirty_packages |> Seq.iter (fun path ->
-        let path' = path |> Lib.SpiralFileSystem.standardize_path
+        let path' = path |> SpiralFileSystem.standardize_path
         trace Verbose (fun () -> $"ServerUtils.dirty_nodes_template / path: {path} / path': {path'}") _locals
         match Map.tryFind path' ids with
         | Some pid ->
@@ -244,7 +245,7 @@ open System.Threading.Tasks
 let is_top_down (x : string) = Path.GetExtension x = ".spi"
 let spiproj_suffix x = Path.Combine(x,"package.spiproj")
 let loader_package default_env (packages : SchemaEnv) (modules : ModuleEnv) (pdir, text) =
-    let pdir' = pdir |> Lib.SpiralFileSystem.standardize_path
+    let pdir' = pdir |> SpiralFileSystem.standardize_path
     trace Verbose (fun () -> $"ServerUtils.loader_package / pdir: {pdir} / pdir': {pdir'}") _locals
     let pdir = pdir'
     let queue = Queue()
@@ -276,7 +277,7 @@ let loader_package default_env (packages : SchemaEnv) (modules : ModuleEnv) (pdi
         trace Verbose (fun () -> $"ServerUtils.loader_package.load_package_some / pdir: {pdir}") _locals
         schema (pdir,text) |> Task.FromResult |> queue.Enqueue
     let load_package_none packages pdir =
-        let pdir' = pdir |> Lib.SpiralFileSystem.standardize_path
+        let pdir' = pdir |> SpiralFileSystem.standardize_path
         trace Verbose (fun () -> $"ServerUtils.loader_package.load_package_none / pdir: {pdir} / pdir': {pdir'}") _locals
         let pdir = pdir'
         match Map.tryFind pdir packages with
@@ -286,8 +287,8 @@ let loader_package default_env (packages : SchemaEnv) (modules : ModuleEnv) (pdi
     let dirty_packages = HashSet()
     let rec invalidate_parent packages (x : DirectoryInfo) =
         if x <> null then
-            let x' = x.FullName |> Lib.SpiralFileSystem.standardize_path
-            // trace Verbose (fun () -> $"""ServerUtils.loader_package.invalidate_parent / x.FullName: {x.FullName |> Lib.SpiralSm.replace "\\" "|"} / x': {x'} / packages: %A{packages |> Map.keys} / pdir: {pdir}""") _locals
+            let x' = x.FullName |> SpiralFileSystem.standardize_path
+            // trace Verbose (fun () -> $"""ServerUtils.loader_package.invalidate_parent / x.FullName: {x.FullName |> SpiralSm.replace "\\" "|"} / x': {x'} / packages: %A{packages |> Map.keys} / pdir: {pdir}""") _locals
             let x_ = x
             let x = {| FullName = x' |}
             if Map.containsKey x.FullName packages then dirty_packages.Add(x.FullName) |> ignore
@@ -307,21 +308,21 @@ let loader_package default_env (packages : SchemaEnv) (modules : ModuleEnv) (pdi
     while 0 < queue.Count do
         match queue.Dequeue().Result with
         | LoadPackage(pdir,Some x) -> 
-            let pdir' = pdir |> Lib.SpiralFileSystem.standardize_path
+            let pdir' = pdir |> SpiralFileSystem.standardize_path
             // trace Verbose (fun () -> $"ServerUtils.loader_package.LoadPackage / pdir: {pdir} / pdir': {pdir'}") _locals
             packages <- Map.add pdir' x packages; dirty_packages.Add(pdir') |> ignore; invalidate_parent packages (Directory.GetParent(pdir'))
             x.schema.packages |> List.iter (fun x -> load_package_none packages (snd x.dir))
             let rec loop = function
                 | FileHierarchy.Directory(_,_,_,l) -> list l
                 | FileHierarchy.File(_,(_,path),_) ->
-                    let path' = path |> Lib.SpiralFileSystem.standardize_path
+                    let path' = path |> SpiralFileSystem.standardize_path
                     trace Verbose (fun () -> $"ServerUtils.loader_package.LoadPackage | FileHierarchy.File(_,(_,path),_) / path: {path} / path': {path'}") _locals
                     load_module modules path'
             and list l = List.iter loop l
             list x.schema.modules
         | LoadPackage(pdir,None) -> packages <- Map.remove pdir packages; dirty_packages.Add(pdir) |> ignore; invalidate_parent packages (Directory.GetParent(pdir))
         | LoadModule(mdir,Some x) ->
-            let mdir' = mdir |> Lib.SpiralFileSystem.standardize_path
+            let mdir' = mdir |> SpiralFileSystem.standardize_path
             trace Verbose (fun () -> $"ServerUtils.loader_package.LoadModule / mdir: {mdir} / mdir': {mdir'}") _locals
             modules <- Map.add mdir' x modules
         | LoadModule(mdir,None) -> modules <- Map.remove mdir modules

@@ -2,7 +2,9 @@
 
 open System.Collections.Generic
 open System.Runtime.CompilerServices
+
 open Polyglot.Common
+open Lib
 
 let list_try_zip a b = try Some (List.zip a b) with _ -> None
 
@@ -23,7 +25,7 @@ let inline remove (dict : Dictionary<_,_>) x on_succ on_fail =
     let mutable q = Unchecked.defaultof<_>
     if dict.Remove(x, &q) then on_succ q else on_fail ()
 let file_uri (x : string) =
-    let result = x |> Lib.SpiralFileSystem.standardize_path |> Lib.SpiralFileSystem.new_file_uri
+    let result = x |> SpiralFileSystem.standardize_path |> SpiralFileSystem.new_file_uri
     trace Verbose (fun () -> $"Utils.file_uri / x: {x} / result: {result}") _locals
     result
 
