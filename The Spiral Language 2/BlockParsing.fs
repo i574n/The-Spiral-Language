@@ -856,9 +856,12 @@ let inbuilt_operators x =
     | "*" -> ValueSome(70, Associativity.Left)
     | "/" -> ValueSome(70, Associativity.Left)
     | "%" -> ValueSome(70, Associativity.Left)
-    | "<|>" -> ValueSome(25, Associativity.Left)
-    | "|>" -> ValueSome(10, Associativity.Left)
-    | ">>" -> ValueSome(15, Associativity.Left)
+    | "</>" -> ValueSome(43, Associativity.Left)
+    | "<|>" -> ValueSome(42, Associativity.Left)
+    | "|>" -> ValueSome(41, Associativity.Left)
+    | "||>" -> ValueSome(41, Associativity.Left)
+    | "|||>" -> ValueSome(41, Associativity.Left)
+    | ">>" -> ValueSome(45, Associativity.Left)
     | "<-" -> ValueSome(4, Associativity.Left)
 
     | "<=" -> ValueSome(40, Associativity.None)
@@ -877,8 +880,8 @@ let inbuilt_operators x =
     | "&&" -> ValueSome(30, Associativity.Left)
     | "::" -> ValueSome(50, Associativity.Right)
     | "^" -> ValueSome(45, Associativity.Right)
-    | "<|" -> ValueSome(10, Associativity.Right)
-    | "<<" -> ValueSome(15, Associativity.Right)
+    | "<|" -> ValueSome(41, Associativity.Right)
+    | "<<" -> ValueSome(45, Associativity.Left)
     | "." -> ValueSome(2, Associativity.Right)
     | "," -> ValueSome(6, Associativity.Right)
     | ":>" -> ValueSome(35, Associativity.Right)
@@ -1070,12 +1073,22 @@ and root_pattern s =
         (root_pattern_rounds + root_pattern_var_nominal_union + root_pattern_wildcard + root_pattern_dyn + pat_value + pat_string 
         + root_pattern_record + pat_symbol + pat_array + pat_list + pat_exists) s
 
-    let pat_and = sepBy1 body (skip_op "&") |>> List.reduce (fun a b -> PatAnd(range_of_pattern a +. range_of_pattern b,a,b))
-    let pat_pair = pat_pair pat_and
-    let pat_cons = range (sepBy1 pat_pair (skip_op "::")) |>> fun (r,x) -> List.reduceBack (pat_list_pair r) x
-    let pat_or = sepBy1 pat_cons (skip_op "|") |>> List.reduce (fun a b -> PatOr(range_of_pattern a +. range_of_pattern b,a,b))
-    let pat_as = pat_or .>>. (opt (skip_keyword SpecAs >>. pat_or )) |>> function a, Some b -> PatAnd(range_of_pattern a +. range_of_pattern b,a,b) | a, None -> a
-    pat_as s
+    let pat_and =
+        sepBy1 body (skip_op "&")
+        |>> List.reduce (fun a b -> PatAnd(range_of_pattern a +. range_of_pattern b, a, b))
+    let pat_cons =
+        range (sepBy1 (pat_pair pat_and) (skip_op "::"))
+        |>> fun (r,x) -> List.reduceBack (pat_list_pair r) x
+    let pat_or =
+        sepBy1 pat_cons (skip_op "|")
+        |>> List.reduce (fun a b -> PatOr(range_of_pattern a +. range_of_pattern b, a, b))
+    let pat_as =
+        pat_or .>>. (opt (skip_keyword SpecAs >>. read_small_var'))
+        |>> function
+            | a, Some (rv,x) -> PatAnd(range_of_pattern a +. rv, a, PatVar(rv,x))
+            | a, None        -> a
+    let pat_pair = pat_pair pat_as
+    pat_pair s
 and root_pattern_when d = (root_pattern .>>. (opt (skip_keyword SpecWhen >>. root_term)) |>> function a, Some b -> PatWhen(range_of_pattern a +. range_of_expr b,a,b) | a, None -> a) d
 and root_pattern_var d =
     let (+) = alt (index d)
