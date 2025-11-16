@@ -1165,9 +1165,21 @@ and root_term d =
              >>= fun ((r,type_vars),body) d ->
                 if d.is_top_down || Option.isSome type_vars then Ok(RawExists(r +. range_of_expr body, (r, type_vars), body))
                 else Error [r, TypeVarsNeedToBeExplicitForExists]
-        let case_rounds = 
-            range (rounds ((((read_op' |>> rawv) <|> next) |>> fun x _ -> x) <|>% RawB))
-            |>> fun (r,x) -> x r
+        let case_rounds =
+            let mk_tuple xs =
+                match xs with
+                | []      -> fun r -> RawB r
+                | [x]     -> fun _ -> x
+                | x :: xr ->
+                    fun _ ->
+                        List.fold (fun a b -> RawPair(range_of_expr a +. range_of_expr b, a, b)) x xr
+            range (
+                rounds (
+                    sepBy (((read_op' |>> rawv) <|> next)) (skip_op ",")
+                    |>> mk_tuple
+                )
+            )
+            |>> fun (r, build) -> build r
         let case_fun =
             (skip_keyword SpecFun >>. many1 root_pattern_pair .>>. (annotated_body "=>" next root_type_annot))
             >>= fun (pats, body) _ ->
