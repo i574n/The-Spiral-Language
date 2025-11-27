@@ -1558,7 +1558,7 @@ let peval (env : TopEnv) (x : E) =
                 )
             | a -> raise_type_error s <| sprintf "Expected an record.\nGot: %s" (show_data a)
             match d with
-            | Some cur -> cur |> dyn true s
+            | Some cur -> cur
             | None -> raise_type_error s $"Cannot find the backend {s.backend.node} in the backend switch op."
         | EOp(_,UnsafeBackendSwitch,[a]) ->
             match term s a with // Unsafe version of the backend switch. Shouldn't ever be mixed with type level computations and bottom up inference.
