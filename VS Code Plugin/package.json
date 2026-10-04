@@ -174,7 +174,7 @@
 		"@types/node": "~22.10",
 		"@types/vscode": "~1.95",
 		"@vscode/vsce": "~3.2",
-		"esbuild": "~0.24",
+		"esbuild": "^0.28.1",
 		"typescript": "next"
 	},
 	"dependencies": {
