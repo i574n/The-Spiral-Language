@@ -1,19 +1,50 @@
-// Creates a list with a single element.
-inl singleton x = Cons (x, Nil)
 // Applies a function to each element of the list, threading an accumulator argument through the computation. If the input function is f and the elements are i0...iN then computes f (... (f s i0)...) iN
 inl fold f s l =
     inl rec body s = function Cons(x,x') => loop (f s x) x' | Nil => s
     and inl loop s l =
         if var_is l then inl ~s = s in join body s l
-        else body s l
+        else body s l 
     loop s l
+
+// Returns the length of the list.
+inl length l = fold (fun s _ => s + 1) 0 l
+instance length list = length
+
+// Creates a list with a single element.
+inl singleton x = Cons (x, Nil)
+// A fold that takes in two lists as an argument.
+inl fold2 f =
+    inl rec body s = function 
+        | (a :: a'), (b :: b') => loop (f s a b) a' b' 
+        | [],[] => s
+        | _ => failwith "The two lists need to be the same length."
+    and inl loop s a b =
+        if var_is a && var_is b then inl ~(s, a, b) = s, a, b in join body s (a, b)
+        else body s (a, b)
+    loop
 // Folds the list from the end to the beginning.
 inl foldBack f l s =
-    inl rec body s = function Cons(x,x') => f x (loop s x') | Nil => s
+    inl rec body s = function 
+        | x :: x' => f x (loop s x') 
+        | [] => s
     and inl loop s l =
         if var_is l then inl ~s = s in join body s l
-        else body s l
+        else body s l 
     loop s l
+
+// Folds the two lists from the end to the beginning.
+inl foldBack2 f a b s =
+    inl rec body s = function 
+        | (a :: a'), (b :: b') => f a b (loop s a' b' )
+        | [],[] => s
+        | _ => failwith "The two lists need to be the same length."
+    and inl loop s a b =
+        if var_is a && var_is b then inl ~(s, a, b) = s, a, b in join body s (a, b)
+        else body s (a, b)
+    loop s a b
+
+// Zips the two lists together.
+inl zip a b = foldBack2 (fun a b l => (a,b) :: l) a b []
 // Reverses a list.
 inl rev l = fold (fun s x => Cons(x,s)) Nil l
 // Appends two lists.
@@ -22,25 +53,107 @@ inl append a b = foldBack (::) a b
 inl concat l = foldBack append l Nil
 // Maps a list.
 inl map f l = foldBack (fun x s => f x :: s) l Nil
+// Maps two lists.
+inl map2 f a b = foldBack2 (fun a b s => f a b :: s) a b Nil
+// Maps a list.
+inl mapi f l = foldBack (fun x (i,s) => inl i = i-1 in i, f i x :: s) l (length l, Nil) |> snd
 // Maps a list in reverse while passing the index into the mapping function.
 inl mapiBack f l = foldBack (fun x (i,l) => i+1, (f i x :: l)) l (0, Nil) |> snd
 // Iterates over the list.
 inl iter f l = fold (fun () x => f x) () l
 // Iterates over the list from the Back.
 inl iterBack f l = foldBack (fun x () => f x) l ()
-// Returns the length of the list.
-inl length l = fold (fun s _ => s + 1) 0 l
-// Coverts the list to an array.
-let toArray forall (ar : * -> * -> *) {create; set} dim {number; int} el. (l : list el) : ar dim el =
-    inl ar = create (length l)
-    inl _ = fold (fun i x => set ar i x . i+1) 0 l
-    ar
+
+// Returns whether an element with a given conditional is true in the list.
+inl rec exists' f l =
+    inl rec body = function Cons(x,x') => f x || loop x' | Nil => false
+    and inl loop l =
+        if var_is l then join body l
+        else body l 
+    loop l
+// Returns whether the conditional function is true for every element in the list.
+inl rec forall' f l =
+    inl rec body = function Cons(x,x') => f x && loop x' | Nil => true
+    and inl loop l =
+        if var_is l then join body l
+        else body l 
+    loop l
 // Initializes the list given a count and the mapping function. If the counter is statically known, it will create a list whose length is known at compile time.
 inl init i f =
-    inl rec body s =
+    inl rec body s = 
         if s < i then f s :: loop (s+1)
         else []
     and inl loop s =
         if var_is i then inl ~s = s in join body s
-        else body s
+        else body s 
     loop 0
+
+// Folds over the list using the state while mapping the arguments.
+inl mapFold forall state el el'. (f : state -> el -> el' * state) s l =
+    inl rec body s = function 
+        | Cons(x,x') => 
+            inl x,s = f s x
+            inl x',s = loop s x'
+            x :: x', s
+        | Nil => [], s
+    and inl loop s l =
+        if var_is l then inl ~s = s in join body s l
+        else body s l 
+    loop s l
+
+// Folds over the list using the state while mapping the arguments starting from the end of the list.
+inl mapFoldBack forall state el el'. (f : el -> state -> el' * state) l s =
+    inl rec body s = function 
+        | Cons(x,x') => 
+            inl x',s = loop s x'
+            inl x,s = f x s
+            x :: x', s
+        | Nil => [], s
+    and inl loop s l =
+        if var_is l then inl ~s = s in join body s l
+        else body s l 
+    loop s l
+
+// Picks an element from a probability distribution represented as a list.
+// The second argument is a random number in the (0,1] range and is used to make the selection.
+// 
+// TODO: This function has not been tested yet. I implemented it and went with another approach before
+// giving it a chance, so use it at your own discression.
+inl pick_discrete forall t. (r : float) (l : list (t * float)) =
+    inl l,sum = mapFold (fun s x => inl s = s + snd x in (fst x, s), s) 0 l
+    assert (0 < r && r <= 1) "The random number needs to be in the given range."
+    inl r = sum * r
+    inl rec body = function
+        | x :: [] => fst x
+        | x :: xs =>
+            if r <= snd x then fst x
+            else loop xs
+        | [] => failwith "Cannot accept an empty list in pick_discrete."
+    and inl loop l =
+        if var_is l then join body l
+        else body l
+    loop l
+
+instance index list = fun l i =>
+    assert (0 <= i) "The index must be 0 or positive."
+    inl rec body (i : int) (x : list el) =
+        match x with 
+        | Cons(x,x') => if i = 0 then x else loop (i-1) x'
+        | Nil => failwith "The index is not less than the length of the list."
+    and inl loop s l =
+        if var_is l then inl ~s = s in join body s l
+        else body s l 
+    loop i l
+
+// Returns the first element that maps to Some in the list.
+inl chooseFirst forall el el'. (f : el -> option el') l : option el' =
+    inl rec body = function 
+        | Cons(x,x') => 
+            match f x with
+            | Some as x => x
+            | None => loop x'
+        | Nil => None
+    and inl loop l =
+        if var_is l then join body l
+        else body l
+    loop l

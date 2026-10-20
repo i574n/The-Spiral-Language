@@ -1,25 +1,21 @@
-// The Spiral core library.
 modules:
     base-
     limit
     real_core*
+    type_arith*
     core-
-    loop
-    loopw
-    am/
-        utils-
-        generic
-        main-
-    iam_real*
-    iam- 
-    rm
-    sm
+    compile_time/
+        types-
+        hashsetm
+        hashmapm
+        typed/
+            hashsetm
+            hashmapm
+    struct*
     listm
+    loop
     optionm
-    dictm_utils/
-        generic
-        table
-        realm*
-    dictm_type-
-    dictm 
+    dep_optionm
     monad
+    arraym
+    sm
