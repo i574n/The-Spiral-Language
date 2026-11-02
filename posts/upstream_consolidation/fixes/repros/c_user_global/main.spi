@@ -1,0 +1,3 @@
+inl main () : i32 =
+    global "#define SPIRAL_USER_GLOBAL 7"
+    $"SPIRAL_USER_GLOBAL" : i32

@@ -264,3 +264,7 @@ __pycache__/
 
 /deps/
 /target/
+target/
+*.spi.ipynb
+*.spi.html
+deps/
