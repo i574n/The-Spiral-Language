@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>c_self_tail_loop.spi</title>
+<style>
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+body { background-color: #1e1e1e; color: #d4d4d4; margin: 0; font: 15px/1.6 system-ui, sans-serif; overflow-wrap: anywhere; }
+main { max-width: 960px; margin: 0 auto; padding: 12px; }
+pre { background-color: #252526; padding: 10px; border-radius: 4px; overflow-x: auto; font: 13px/1.5 ui-monospace, Consolas, monospace; }
+pre.output { background-color: #181818; color: #bbb; border-left: 3px solid #444; }
+.plot { background-color: #fff; margin: 6px 0; } .plot svg { max-width: 100%; height: auto; display: block; }
+.badge { display: inline-block; font-size: 12px; padding: 0 6px; border-radius: 3px; margin-bottom: 4px; }
+.badge.passed { background-color: #23452a; color: #9fdc9f; }
+.badge.failed { background-color: #4a2323; color: #f0a0a0; }
+.badge.other { background-color: #333; color: #bbb; }
+a { color: #4fc1ff; }
+.tok-comment { color: #6a9955; }
+.tok-escaped_char { color: #d7ba7d; }
+.tok-escaped_var { color: #d7ba7d; }
+.tok-keyword { color: #c586c0; }
+.tok-number { color: #b5cea8; }
+.tok-number_suffix { color: #b5cea8; }
+.tok-operator { color: #d4d4d4; }
+.tok-parenthesis { color: #ffd700; }
+.tok-string { color: #ce9178; }
+.tok-symbol { color: #4fc1ff; }
+.tok-type_variable { color: #4ec9b0; }
+.tok-unary_operator { color: #d4d4d4; }
+.tok-unescaped_char { color: #ce9178; }
+.tok-variable { color: #9cdcfe; }
+@media (max-width: 600px) { main { padding: 6px; } pre { font-size: 12px; } }
+</style>
+</head>
+<body>
+<main>
+<pre class="code"><code>///- --package .
+<span class="tok-keyword">open</span> <span class="tok-variable">sm'_operators</span>
+<span class="tok-keyword">open</span> <span class="tok-variable">engine</span></code></pre>
+
+<h4>c_self_tail_loop (test)</h4>
+
+<span class="badge other">test c_self_tail_loop: prelude</span>
+<pre class="code"><code>///- --test static
+
+<span class="tok-keyword">open</span> <span class="tok-variable">testing</span></code></pre>
+
+<pre class="code"><code><span class="tok-keyword">inl</span> <span class="tok-variable">entry</span> <span class="tok-parenthesis">(</span><span class="tok-parenthesis">)</span> <span class="tok-operator">:</span> <span class="tok-variable">page</span><span class="tok-symbol">.entry</span> <span class="tok-operator">=</span>
+    <span class="tok-parenthesis">{</span>
+        <span class="tok-variable">slug</span> <span class="tok-operator">=</span> <span class="tok-string">&quot;</span><span class="tok-string">c-self-tail-loop</span><span class="tok-string">&quot;</span>
+        <span class="tok-variable">title</span> <span class="tok-operator">=</span> <span class="tok-string">&quot;</span><span class="tok-string">C Self Tail Loops</span><span class="tok-string">&quot;</span>
+        <span class="tok-variable">date</span> <span class="tok-operator">=</span> <span class="tok-string">&quot;</span><span class="tok-string">2026-10-27</span><span class="tok-string">&quot;</span>
+        <span class="tok-variable">kind</span> <span class="tok-operator">=</span> <span class="tok-variable">page</span><span class="tok-symbol">.Article</span>
+        <span class="tok-variable">authors</span> <span class="tok-operator">=</span> <span class="tok-parenthesis">[</span><span class="tok-parenthesis">{</span> <span class="tok-variable">name</span> <span class="tok-operator">=</span> <span class="tok-string">&quot;</span><span class="tok-string">i574n</span><span class="tok-string">&quot;</span><span class="tok-operator">;</span> <span class="tok-variable">handle</span> <span class="tok-operator">=</span> <span class="tok-string">&quot;</span><span class="tok-string">i574n</span><span class="tok-string">&quot;</span> <span class="tok-parenthesis">}</span><span class="tok-parenthesis">]</span>
+        <span class="tok-variable">blurb</span> <span class="tok-operator">=</span> <span class="tok-string">&quot;</span><span class="tok-string">A let rec function that calls itself in tail position now compiles to a loop in the C backend, so deep self recursion no longer overflows the stack.</span><span class="tok-string">&quot;</span>
+        <span class="tok-variable">blocks</span> <span class="tok-operator">=</span>
+            <span class="tok-parenthesis">[</span>
+                <span class="tok-variable">post</span><span class="tok-symbol">.Paragraph</span> <span class="tok-string">&quot;</span><span class="tok-string">The second post in the series. The first one ended with a bug that already reproduces on host_cpp_and_cuda_backend: a let rec function whose last step calls itself compiles to a recursive C function. At -O0 gcc does no tail-call elimination, so a loop of a million steps written that way overflows the stack.</span><span class="tok-string">&quot;</span>
+                <span class="tok-variable">post</span><span class="tok-symbol">.Heading</span> <span class="tok-string">&quot;</span><span class="tok-string">The bug</span><span class="tok-string">&quot;</span>
+                <span class="tok-variable">post</span><span class="tok-symbol">.Paragraph</span> <span class="tok-string">&quot;</span><span class="tok-string">The repro walks a four-element array a million times, threading a record and an accumulator through a let rec loop. Upstream's C for it is a function that calls itself once per step, and at -O0 the program dies with exit -1073741571 (0xC00000FD, a stack overflow).</span><span class="tok-string">&quot;</span>
+                <span class="tok-variable">post</span><span class="tok-symbol">.Heading</span> <span class="tok-string">&quot;</span><span class="tok-string">The fix</span><span class="tok-string">&quot;</span>
+                <span class="tok-variable">post</span><span class="tok-symbol">.Paragraph</span> <span class="tok-string">&quot;</span><span class="tok-string">CodegenC now checks, before it prints a method, whether some path through the body ends in a call to that same method: directly, in a branch of an if, a union match or an int switch, or through a let whose bound result is returned unchanged. Such a method is printed as a while (1) loop, and the paths that don't call it still return. A self call becomes an assignment of the new arguments, through temporaries so that every argument is computed from the old values, followed by continue. Every other method prints as before.</span><span class="tok-string">&quot;</span>
+                <span class="tok-variable">post</span><span class="tok-symbol">.Table</span> <span class="tok-parenthesis">(</span>
+                    <span class="tok-parenthesis">[</span><span class="tok-string">&quot;</span><span class="tok-string">Sample</span><span class="tok-string">&quot;</span><span class="tok-operator">;</span> <span class="tok-string">&quot;</span><span class="tok-string">Before</span><span class="tok-string">&quot;</span><span class="tok-operator">;</span> <span class="tok-string">&quot;</span><span class="tok-string">After</span><span class="tok-string">&quot;</span><span class="tok-parenthesis">]</span><span class="tok-operator">,</span>
+                    <span class="tok-parenthesis">[</span>
+                        <span class="tok-parenthesis">[</span><span class="tok-string">&quot;</span><span class="tok-string">c_self_tail_loop_heap at -O0</span><span class="tok-string">&quot;</span><span class="tok-operator">;</span> <span class="tok-string">&quot;</span><span class="tok-string">exit -1073741571 (stack overflow)</span><span class="tok-string">&quot;</span><span class="tok-operator">;</span> <span class="tok-string">&quot;</span><span class="tok-string">exit 24</span><span class="tok-string">&quot;</span><span class="tok-parenthesis">]</span>
+                    <span class="tok-parenthesis">]</span><span class="tok-parenthesis">)</span>
+                <span class="tok-variable">post</span><span class="tok-symbol">.Heading</span> <span class="tok-string">&quot;</span><span class="tok-string">The port</span><span class="tok-string">&quot;</span>
+                <span class="tok-variable">post</span><span class="tok-symbol">.Paragraph</span> <span class="tok-string">&quot;</span><span class="tok-string">The fix was written on the fork, whose codegen has moved on, so it was cut from the fork's history and ported by hand. Two of the eight hunks in that cut turned out to be other features, a refcount elision for stack unions and an iterative decref for recursive heap unions. Both use types upstream does not have, so they were dropped from this post. The fork counts nested functions with fns_printing.Count; upstream has no fns_printing, so the port keeps an explicit depth counter instead. A hunk stays only if it names a self-tail term or a self-tail hunk uses something it defines.</span><span class="tok-string">&quot;</span>
+                <span class="tok-variable">post</span><span class="tok-symbol">.Heading</span> <span class="tok-string">&quot;</span><span class="tok-string">Checked</span><span class="tok-string">&quot;</span>
+                <span class="tok-variable">post</span><span class="tok-symbol">.Paragraph</span> <span class="tok-string">&quot;</span><span class="tok-string">A compiler built from host_cpp_and_cuda_backend with post 1's patches and this one, against the oracle's expected exits:</span><span class="tok-string">&quot;</span>
+                <span class="tok-variable">post</span><span class="tok-symbol">.Table</span> <span class="tok-parenthesis">(</span>
+                    <span class="tok-parenthesis">[</span><span class="tok-string">&quot;</span><span class="tok-string">Fix</span><span class="tok-string">&quot;</span><span class="tok-operator">;</span> <span class="tok-string">&quot;</span><span class="tok-string">Sample</span><span class="tok-string">&quot;</span><span class="tok-operator">;</span> <span class="tok-string">&quot;</span><span class="tok-string">Exit</span><span class="tok-string">&quot;</span><span class="tok-operator">;</span> <span class="tok-string">&quot;</span><span class="tok-string">Expected</span><span class="tok-string">&quot;</span><span class="tok-parenthesis">]</span><span class="tok-operator">,</span>
+                    <span class="tok-parenthesis">[</span>
+                        <span class="tok-parenthesis">[</span><span class="tok-string">&quot;</span><span class="tok-string">C-SELF-TAIL-LOOP</span><span class="tok-string">&quot;</span><span class="tok-operator">;</span> <span class="tok-string">&quot;</span><span class="tok-string">c_self_tail_loop_heap</span><span class="tok-string">&quot;</span><span class="tok-operator">;</span> <span class="tok-string">&quot;</span><span class="tok-string">24</span><span class="tok-string">&quot;</span><span class="tok-operator">;</span> <span class="tok-string">&quot;</span><span class="tok-string">24</span><span class="tok-string">&quot;</span><span class="tok-parenthesis">]</span>
+                        <span class="tok-parenthesis">[</span><span class="tok-string">&quot;</span><span class="tok-string">C-ARRAY-CREATE-INIT</span><span class="tok-string">&quot;</span><span class="tok-operator">;</span> <span class="tok-string">&quot;</span><span class="tok-string">c_array_create_reused</span><span class="tok-string">&quot;</span><span class="tok-operator">;</span> <span class="tok-string">&quot;</span><span class="tok-string">0</span><span class="tok-string">&quot;</span><span class="tok-operator">;</span> <span class="tok-string">&quot;</span><span class="tok-string">0</span><span class="tok-string">&quot;</span><span class="tok-parenthesis">]</span>
+                        <span class="tok-parenthesis">[</span><span class="tok-string">&quot;</span><span class="tok-string">SPIRAL-MACRO-SPLICE-QUOTE</span><span class="tok-string">&quot;</span><span class="tok-operator">;</span> <span class="tok-string">&quot;</span><span class="tok-string">macro_splice_before_quote</span><span class="tok-string">&quot;</span><span class="tok-operator">;</span> <span class="tok-string">&quot;</span><span class="tok-string">17</span><span class="tok-string">&quot;</span><span class="tok-operator">;</span> <span class="tok-string">&quot;</span><span class="tok-string">17</span><span class="tok-string">&quot;</span><span class="tok-parenthesis">]</span>
+                        <span class="tok-parenthesis">[</span><span class="tok-string">&quot;</span><span class="tok-string">GADT-MATCH-FORALL-CONSTRAINT</span><span class="tok-string">&quot;</span><span class="tok-operator">;</span> <span class="tok-string">&quot;</span><span class="tok-string">gadt_match_loses_constraint</span><span class="tok-string">&quot;</span><span class="tok-operator">;</span> <span class="tok-string">&quot;</span><span class="tok-string">0</span><span class="tok-string">&quot;</span><span class="tok-operator">;</span> <span class="tok-string">&quot;</span><span class="tok-string">0</span><span class="tok-string">&quot;</span><span class="tok-parenthesis">]</span>
+                    <span class="tok-parenthesis">]</span><span class="tok-parenthesis">)</span>
+                <span class="tok-variable">post</span><span class="tok-symbol">.Rule</span>
+                <span class="tok-variable">post</span><span class="tok-symbol">.Heading</span> <span class="tok-string">&quot;</span><span class="tok-string">Next</span><span class="tok-string">&quot;</span>
+                <span class="tok-variable">post</span><span class="tok-symbol">.Paragraph</span> <span class="tok-string">&quot;</span><span class="tok-string">One of the dropped hunks is a change of its own: upstream frees a recursive heap union with a decref that calls itself once per node, and the fork's version walks the chain in a loop instead. A later post measures whether upstream's recursive decref overflows on a long list, and ports the loop if it does.</span><span class="tok-string">&quot;</span>
+            <span class="tok-parenthesis">]</span>
+    <span class="tok-parenthesis">}</span></code></pre>
+
+<h4>the_post_is_a_page_of_the_site (test)</h4>
+
+<span class="badge passed">test the_post_is_a_page_of_the_site: passed</span>
+<pre class="code"><code>///- --test
+
+<span class="tok-parenthesis">[</span><span class="tok-variable">entry</span> <span class="tok-parenthesis">(</span><span class="tok-parenthesis">)</span><span class="tok-parenthesis">]</span> <span class="tok-operator">|&gt;</span> <span class="tok-variable">site</span><span class="tok-symbol">.files</span> <span class="tok-operator">|&gt;</span> <span class="tok-variable">site</span><span class="tok-symbol">.paths</span> <span class="tok-operator">|&gt;</span> <span class="tok-variable">sm'</span><span class="tok-symbol">.contains</span> <span class="tok-string">&quot;</span><span class="tok-string">c-self-tail-loop/index.html</span><span class="tok-string">&quot;</span> <span class="tok-operator">|&gt;</span> <span class="tok-variable">_assert_eq</span> <span class="tok-number">true</span></code></pre>
+<pre class="output">__assert_eq { expected = true }</pre>
+
+<h4>the_post_renders_its_tables (test)</h4>
+
+<span class="badge passed">test the_post_renders_its_tables: passed</span>
+<pre class="code"><code>///- --test
+
+<span class="tok-keyword">inl</span> <span class="tok-variable">html</span> <span class="tok-operator">=</span> <span class="tok-variable">page</span><span class="tok-symbol">.render_entry</span> <span class="tok-parenthesis">(</span><span class="tok-variable">entry</span> <span class="tok-parenthesis">(</span><span class="tok-parenthesis">)</span><span class="tok-parenthesis">)</span>
+<span class="tok-parenthesis">(</span><span class="tok-variable">sm'</span><span class="tok-symbol">.contains</span> <span class="tok-string">&quot;</span><span class="tok-string">&lt;table</span><span class="tok-string">&quot;</span> <span class="tok-variable">html</span><span class="tok-operator">,</span> <span class="tok-variable">sm'</span><span class="tok-symbol">.contains</span> <span class="tok-string">&quot;</span><span class="tok-string">C-SELF-TAIL-LOOP</span><span class="tok-string">&quot;</span> <span class="tok-variable">html</span><span class="tok-parenthesis">)</span> <span class="tok-operator">|&gt;</span> <span class="tok-variable">_assert_eq</span> <span class="tok-parenthesis">(</span><span class="tok-number">true</span><span class="tok-operator">,</span> <span class="tok-number">true</span><span class="tok-parenthesis">)</span></code></pre>
+<pre class="output">__assert_eq { expected = (true, true) }</pre>
+
+</main>
+</body>
+</html>

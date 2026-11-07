@@ -1,0 +1,722 @@
+2.16.0 (WIP)
+
+New native Cuda backend and various features to support it have been added into the language. Also the .NET SDK has been bumped to 9.
+
+* Added the host/device Cuda C++ backend.
+* Changed the data that backend join points return.
+* Added a new macro prefix `#`. For example: `$"call #var"`. The `#` will now inline the term variables into the resuling output instead of converting them to a tuple. This is to support calling Cuda kernels from host.
+* In order to separate out the core library from the generated output and reduce code noise, the Cuda related backends will from here on out be outputting two separate files, one for the user code and one for the core library that used to be inlined.
+* Removed the old Cuda backend, and replaced the one Python uses with the new generic C++ one that is used for both host and device Cuda C++ code.
+* `new`, `assert.h` and `stdio.h` headers are now automatically imported in the core library. An `#ifndef` is placed to ensure compatibility with NVRTC.
+* The `default_int` and `default_uint` in `corelib.cuh` are automatically replaced at compile time with the actual defaults.
+* The core libraries have been appropriately named. `reference_counting.cuh` has been changed to `corelib.cuh`, and `reference_counting.py` has been changed to `corelib.py`.
+* Fixed the compilation of Cuda virtual closure destructors on the device by generating the programmatically instead of having them be default. Note: Will revert this change after Nvidia fixes their compiler. I got note saying they would in the next major release.
+* Replaced the 3rd party lib OrderedDictionary with the inbuilt one in .NET 9.
+* Added the `UnsafeBackendSwitch` operation to the language. Only use it if it won't result in type inconsistencies.
+* Remove the `main_body` from both the native Cuda and Python backends. The device sync was causing screen flickering and system instability due to premature frees when combined with a debugger. It's be best that device sync be done manually after all.
+* TODO: Test whether the prerelease mode works.
+
+2.15.6 (12/1/2024)
+
+* Actually made the __cluster_dim__ annotations work.
+
+2.15.4-5 (12/1/2024)
+
+* Modified the Cuda codegen so it supports __cluster_dim__ annotations.
+
+2.15.3 (10/6/2024)
+
+* Got rid of the compiler error in `generalize`.
+
+2.15.2 (10/1/2024)
+
+* Removed the printfn I accidentally left in.
+
+2.15.1 (10/1/2024)
+
+* Added the missing YExists and YForall cases in the is_unify in the partial evaluator.
+
+2.15.0 (9/19/2024)
+
+Added the stack mutable layout type into the language.
+
+* In the Cuda codegen, indexing into layout types now generates a reference type in the compiled code.
+
+2.14.2 (9/17/2024)
+
+* Modified the way int literals are printed in the Cuda backend for compatibility with Godbolt (Compiler Explorer).
+
+2.14.1 (9/16/2024)
+
+* Added the missing YLit case in the typecase unifier in the partial evaluator.
+
+2.14.0 (9/9/2024)
+
+Changed the indexing semantics of the layout types in the Cuda backend. From here on out, their destructured variables will be code generated as references.
+
+2.13.15 (9/8/2024)
+
+* Minor change to the way the main type vars are defined in the Python backend. Intellisense will stop complaining about vars being used in type annotations.
+
+2.13.14 (9/6/2024)
+
+* Changed the FreeVars op so it uses {} instead of () as the terminator. Unit types unlike empty records don't mix well with tensors.
+
+2.13.13 (9/5/2024)
+
+* Non-default literals can now be safely converted by annotations as long as they are immediate. Example: `real 0 : f32`.
+
+2.13.12 (8/26/2024)
+
+* Fixed a type var shadowing bug during module opens in the top down segment.
+
+2.13.11 (8/21/2024)
+
+Same as prev, VS Code marketplace is behaving strangely.
+
+2.13.10 (8/20/2024)
+
+* The Cuda closure constructors now have the correct __device__ annotation.
+* Added the FreeVarsReplace op to the language.
+* The Python main function has a device synchronization on the main stream at the end so it catches all the `__trap()` exceptions being raised.
+
+2.13.9 (8/18/2024)
+
+* Added a `__trap()` in TyUnionUnbox. Now trap calls will be placed in the default case in Cuda union unboxing.
+
+2.13.8 (8/17/2024)
+
+* Replaced `asm("exit;")` with `__trap()` in the Cuda codegen. It will raise an error on the host (assuming it doesn't exit before the kernel completes.)
+* Changed the way the main function is generated on the Python side so the above bullet point holds.
+
+2.13.7 (8/9/2024)
+
+* Prefixing a function name with noinline causes the __noinline__ annotation to be generated in the Cuda codegen.
+
+2.13.6 (8/9/2024)
+
+* Fixed the incorrect type id assignment in PatExists during pattern compilation.
+
+2.13.5 (8/7/2024)
+
+* The Spiral VS Code plugin now supports dynamic port allocations. It does that when the port is set to 0, and that has been made the new default.
+
+2.13.4 (8/2/2024)
+
+* Fixed an error in the handling of real nominals introduded in the v2.13.0 of Spiral.
+
+2.13.3 (8/2/2024)
+
+Minor parser improvement. `inl model_output : int -> _ = function ...` does not give an error anymore
+
+* Global functions can be checked for validity though the annotation in the parser.
+
+2.13.2 (8/2/2024)
+
+Minor parser improvement to avoid having to put parens around existential patterns.
+
+* Changed the way existentials are being parsed in patterns.
+* Changed the way foralls are being parsed in types.
+
+2.13.1 (8/2/2024)
+
+* Added Printf and StaticStringConcat ops to the language in order to assist string formatting in the coreext module in the ML library.
+* In the ML library we resolved the issue of semaphores not being used correctly. Now the warp threads will be reconverging correctly.
+
+2.13.0 (7/28/2024)
+
+Added higher ranked types to the language.
+
+2.12.7 (7/26/2024)
+
+* Fixed an issue of the Spiral throwing incoming away messages (and files) larger than 32kb. Now the limit is 1mb. 
+* Added a recursion check when unifying GADT type variables. Now the lang server should stop crashing on some examples.
+
+2.12.6 (7/23/2024)
+
+* Added the HashMapSet op to the language.
+
+2.12.5 (7/20/2024)
+
+* Fixed a bug in the `generalize` function related to the existential variable case.
+
+2.12.4 (7/18/2024)
+
+* Fixed how the type variables are being substituted when not under foralls.
+
+2.12.3 (7/11/2024)
+
+* The typecases are now being filled in correctly.
+
+2.12.2 (7/10/2024)
+
+* Fixed the incorrect type vars substitutions when passing recursive functions into GADT cases.
+
+2.12.1 (7/7/2024)
+
+* Fixed incorrect recursive check for regular union cases.
+
+2.12.0 (7/5/2024)
+
+Added GADTs to the language.
+
+* Fixed the bug where the union constructor was given the wrong annotation in the prepass.
+* Fixed the crash bug related to the exists term level optional type arguments in the inferencer.
+* Changed how BackendSwitch works in the partial evaluator to fix it being unsound and removed the top down restrictions. It no longer requires an annotation.
+* Fixed `pattern` being called incorrectly in a few places instead of `loop` in the inference module.
+* Fixed the shadowing of existential variables in the pattern inferencer.
+* Made sure the existential type variables are being reused between the or patterns.
+* Fixed the pattern validator in parsing not recursing on existential patterns.
+* Changed the semantics of the nominals slightly to disallow recursive invocations.
+
+2.11.4 (6/24/2024)
+
+* Changed `long` to `int` in the Cuda backend as longs are 8 byte on some systems.
+
+2.11.3 (6/23/2024)
+
+* Turned off the existential variable shadowing check so they can be used in `or` patterns.
+
+2.11.1 (6/17/2024)
+
+* Updated the readme.
+
+2.11.0 (6/17/2024)
+
+Extended the Python + Cuda backend so it supports heap allocated closures, recursive mutual unions and layout types. The Cuda backend in particular has novel function types that were added to the language: fptr and closure. The vanilla functions can be converted to function pointers and closures specifically using `to_fptr` and `to_closure`. Because the these types use native C++ features based on shared pointers for ref counting, they are completely interoperable with existing C++ libraries.
+
+Whereas what we had before could be considered a prototype backend, this one has support for the full range of Spiral's language features. The tiny Python + Cuda backend has grown up. It is now a fully fledged one.
+
+* Increased the stack space available to the partial evaluator and the code generator by over 200 fold. Now they are ran on their own thread.
+
+2.10.11 (6/5/2024)
+
+* Fixed a bug in the renaming of existentials in join points.
+* Expanded the hash map functionality so that the can be made immutable and passed through join points.
+
+2.10.10 (6/3/2024)
+
+* Fixed a crash bug in the inference of existential patterns.
+* Filled in a missing DHashMap case in the ref counting pass for the C prototype backend.
+
+2.10.9 (6/1/2024)
+
+* Added compile time hash maps to the language.
+
+2.10.8 (5/28/2024)
+
+* Speed up compilation of union types on the Cuda backend by 20% by replacing the union tag bitfield with an u8 type.
+
+2.10.7 (5/19/2024)
+
+* Inserted the printing of static array classes during codegen for both the Python and the Cuda backends.
+* CuPy arrays have proper boolean types instead of treating them as uint8 now.
+
+2.10.6 (5/17/2024)
+
+* Extended the SizeOf op in the partial evaluator so it supports booleans.
+
+2.10.5 (5/17/2024)
+
+* Fixed the ref counting related bug leading to unbound vars being deleted in the Python codegen.
+
+2.10.4 (5/15/2024)
+
+* Fixed the handling of closure variables in the Python codegen.
+
+2.10.3 (5/10/2024)
+
+* Added the NominalTypeApply op into the language.
+
+2.10.2 (5/9/2024)
+
+* Restricted the use of BackendSwitch to the real segment.
+
+2.10.1 (5/9/2024)
+
+* Improved the tokenizer so it parses nested parens in macro expressions.
+
+2.10.0 (5/8/2024)
+
+Fundamental changes to how join points work. 
+
+* The backend switch now requires an annotation, which will break all the old examples, but the fix for that is easy.
+* The backend switch is now inlined, and is no longer evaluated in the code generators. All of their functionality has been moved to the partial evaluation phase.
+
+2.9.0 (5/6/2024)
+
+Various macro related changes and bugfixes.
+
+* Changed to the tokenizer to allow the `(), !() and @() patterns in macros.
+* Changed the escaped variable v$ in macros to \v. Updated the docs and the examples to reflect that.
+* Added the semantic tokens so it should be more obvious that \v has special behavior.
+* `` !! and @@ also have semantic tokens now.
+* Fixed the infinite loop bugs in the line parser `many1Satisfy2L`.
+
+2.8.10 (4/28/2024)
+
+* Fixed the way the union tags were printed in the Cuda backend. They have to be unsigned values.
+
+2.8.9 (4/18/2024)
+
+* Fixed a bug where i8 types weren't being printed correctly on the Cuda side.
+
+2.8.8 (4/18/2024)
+
+* Implemented the Failwith case in the Cuda backend. Now exceptions can be raised there.
+* Improved the error message for real functions in top down segment.
+
+2.8.7 (4/17/2024)
+
+* The parser now allows for parsing of existentials with zero type variables.
+* Added the `ExistsStrip`, `ExistsTypeIs` and `ExistslIs` ops to the language.
+
+2.8.6 (4/15/2024)
+
+* Some changes to the readme and the Spiral config descriptions.
+
+2.8.5 (4/13/2024)
+
+* Fixed a bug where default i64 types were being interpreted as i8.
+* Added the equivalent unsigned default int called `uint`. It's derived automatically from `int`.
+
+2.8.4 (4/10/2024)
+
+* Thanks to the improved publish.ps1 script, the VS Code extension now has a proper readme instead of a link to the main docs.
+* Also converted the logo to PNG format since the VS Code extensions don't support SVG.
+
+2.8.3 (4/10/2024)
+
+* Added the various compile time hashset operations to the language.
+
+2.8.2 (3/30/2024)
+
+* Disallowed the shadowing of existential type variables in patterns in the top-down segment.
+
+2.8.0 (3/30/2024)
+
+Implemented the existential types.
+
+2.7.9 (3/21/2024)
+
+* Removed the cmath header in the Cuda backend for inbuilt math ops.
+* Taken care of the way infinities and nans are printed in the Cuda backend.
+
+2.7.8 (3/18/2024)
+
+* The language extension is now bundled using ESBuild, which should lower its size by 20%.
+
+2.7.7 (3/8/2024)
+
+* Ops without arguments are now allowed.
+* Changed pragma unrolling to a push and pop model.
+
+2.7.6 (3/8/2024)
+
+* Added to a `PragmaUnroll` op to the language. 
+
+2.7.5 (2/14/2024)
+
+* Fixed the codegen of tuples and nominals in arrays for the Cuda backend. The error is still in the other C++ backend, but that one is slated for demolition.
+
+2.7.4 (2/12/2024)
+
+* Added the `UsesOriginalNominals` operation to the language. 
+
+2.7.3 (2/3/2024)
+
+* Significantly extended the functionality of `sizeof`. Now it will work on any type.
+
+2.7.2 (2/2/2024)
+
+* Fix the server crash error when a nominal had too many type arguments.
+
+2.7.1 (1/31/2024)
+
+* Changed the Python + Cuda codegen for maximum NVRTC compatibility. 
+
+2.7.0 (1/24/2024)
+
+Updated the project so it uses .NET 8. It will require the .NET 8 SDK to run henceforth.
+
+2.6.1 (1/18/2024)
+
+* Made the [] and the ;[] patterns allowed immediately in an inl without the parenthesis.
+* ArrayLength now accesses the size property to get the total number of elements instead of using len in the Python backend.
+
+2.6.0 (1/17/2024)
+
+Made the default ints and floats selectable from the language settings in VS Code.
+
+* Implemented BackendSwitch. Now it should be possible to write backend polymorphic code.
+* Implemented UsesOriginalTermVars. This is used for extra security in tensor reordering operations.
+* Fixed an error in the Python + Cuda codegen where indexing into an array returned a 0-dim CuPy array instead of a value.
+
+2.5.7 (12/28/2023)
+
+* Fixed an error in the CUDA back end, where the method forward declarations weren't printed with the __device__ annotation. 
+
+2.5.6 (12/27/2023)
+
+* Made some changes that should hopefully make reconnects in the vs code extension client work even after the connection has been broken for a prolonged amount of time, such as when the computer goes to sleep.
+
+2.5.5 (12/25/2023)
+
+* Fixed a minor error in the error printing for RecordFoldBack.
+
+2.5.4 (12/21/2023)
+
+* Added the SymbolToString op to the language.
+
+2.5.3 (12/16/2023)
+
+* Added bitwise complement unary operator to the language.
+
+2.5.2 (11/3/2023)
+
+* Fixed some of the compilation bugs in the Cuda backend. Now tuple and union types should be usable. 
+
+2.5.1 (11/3/2023)
+
+* Removed the Python backend.
+
+2.5.0 (11/3/2023)
+
+Implemented the Python + Cuda backend.
+
+* Replaced the HLC C++ backend with a Cuda C++ one.
+* The inbuilt arrays have been renamed to array_base and the array literals are now automatically wrapped in an `array` call.
+* Removed the UPMEM backend.
+
+2.4.25 (10/1/2023)
+
+* Changed the parser so the join point names are propagated better.
+* Fixed the join point naming in the HLS C++ backend.
+* Separate the while loop methods from the regular ones and made them inlineable.
+* Removed them and the tuple creation functions from the forward declarations.
+
+2.4.24 (9/28/2023)
+
+* Added Pi, Sin and Cos operations to the language.
+* Added Sin and Cos to the HLS backend.
+* It now uses cmath instead of math.h as the math header file.
+* Also updated the core library so it uses them.
+
+2.4.23 (9/28/2023)
+
+* #pragma statement do not produce a semicolon statement at the end anymore.
+
+2.4.22 (9/23/2023)
+
+* Added the StringLitToSymbol to the language and fixed the way closure args are printed for singleton vars.
+
+2.4.21 (9/19/2023)
+
+* Changed the way the unions are generated so the return type errors in the HLS C++ compiler are avoided.
+
+2.4.20 (9/18/2023)
+
+* A significant number of changes related to how union types are compiled. The constructors/assignment operators will now get generated from them in the C++ backend.
+* Also changed the way closure arguments work. It should be much easier to use them for C++ interop.
+
+2.4.19 (9/14/2023)
+
+* Final bit of wrangling. I've removed ESBuild and Typescript as dependencies so they aren't getting packaged with the Spiral plugin anymore.
+* I won't bother trying to get the build systems to work anymore, I opened an issue on ESBuild as to why it is not bundling the `ws` package.
+
+2.4.14-18 (9/14/2023)
+
+* Trying to get the ESBuild to work.
+* It only works if the node_modules folder is present in the extension. What a waste of time this was.
+
+2.4.13 (9/14/2023)
+
+Type level artithmetic support.
+
+* Adjusted the printing of type literals so backticks are being output in the infer and partial eval phases.
+* Modified TypeLitToLit op so it evaluates the nominal wrappers to literals. This allows the language to support type level arithmetic operations.
+* Did a similar thing for the HLS C++ backend. Now splicing type lits in macros will work correctly.
+* The other backends don't support it yet.
+
+2.4.12 (9/8/2023)
+
+* Added the missing case in unify for type literals.
+
+2.4.11 (9/8/2023)
+
+* Fixed a bug in nominals with unit bodies.
+* Fixed the incorrect return type being assigned in nominal constructor functions.
+
+2.4.10 (9/8/2023)
+
+* Fixed an error when infering the or cases in the type inferencer.
+
+2.4.9 (9/6/2023)
+
+Minor HLS C++ backend bugfixes.
+
+* String is now `const char *` instead of a `char *`
+
+2.4.8 (9/6/2023)
+
+Minor HLS C++ backend bugfixes.
+
+* Fixed the invalid method names on the C backend.
+* Adjusted the backend so it forward generates the functions.
+* Moved forward declarations below the type declarations.
+
+2.4.7 (8/29/2023)
+
+* Also, fixed the erronous package existence regression.
+
+2.4.6 (8/29/2023)
+
+* Removed the print statement left in by accident.
+
+2.4.5 (8/29/2023)
+
+* Fixed the issue where writing a module called 'con' would cause the language server to deadlock.
+
+2.4.4 (8/29/2023)
+
+* Loosened the restriction on returning void in the HLS C++ backend.
+* Also added the printing of the array type.
+* Lightened up the imports in the C++ backend it doesn't need many of the C backend ones.
+* Extended the type parser so it parser default literals.
+* Fixed the overeager metavars assertion bug in nested functions.
+
+2.4.3 (1/24/2023)
+
+* Created the HLS C++ backend.
+
+2.4.2 (1/24/2023)
+
+* Finished adding the type level literals to the language.
+
+2.4.1 (1/23/2023)
+
+* Added a 1s sleep when restarting the server using a command.
+
+2.4.0 (1/23/2023)
+
+* Replaced ZeroMQ with SignalR in the language server. Now it is compatible with the latest VS version.
+
+2.3.10 (1/18/2023)
+
+* Fixed a bug in constraint process where kind checking was not being done for nested metavars.
+
+2.3.9 (1/17/2023)
+
+* The constraints have kinds now.
+* Fixed the way the contraints work. Now the type system should be sound.
+* Made a small speed tweak in the inferencer.
+
+2.3.8 (1/14/2023)
+
+* Added the `uint` constraint to the language.
+* Added duplicate constraint checking in the parser.
+* Changed the type signatures of the array functions in the core library so that the `dim` type variable has the {number; int} constraint instead of just {number}.
+* Removed the unapplied typevar check in the constraint processor.
+* Fixed an error where the nested contraints were not propagated fully.
+
+2.3.7 (1/5/2023)
+
+Another significant redesign of the C ref counting backend. Tail recursive loops will be maximally efficient. Will be suitable for multithreaded code if atomics are brought in. Also the old version was broken when duplicate variables are passed into closure calls.
+
+* Grammar fix to the v$ macro error message, as well as a small efficiency improvement in string building.
+* Fixed the missing semicolon in the TyFailwith case.
+
+2.3.6 (1/1/2023)
+
+* Expanded the v$ macro in the C backend a bit.
+
+2.3.5 (12/31/2022)
+
+* Added the SizeOf op to the language.
+* Modified the way Int32 and UInt32 literals are printed back to how they were before.
+* Added a check when applying prototype instances.
+* Added the FreeVars op to the language
+
+2.3.4 (12/29/2022)
+
+* Extended VarTag so it reaches into the nominal.
+* Fixed `FunctionTermSlotsGet`.
+
+2.3.3 (12/28/2022)
+
+* Added some new serialization ops to core_real. `FunctionTermSlotsSet`, `FunctionTermSlotsGet` and `FunctionIs`.
+
+2.3.2 (12/28/2022)
+
+* Fixed a critical bug in Infer regarding how recursive inl statements are annotated.
+* The UPMEM C backend will now use `buddy_alloc` and `buddy_free` instead of the standard C `malloc` and `free`.
+
+2.3.1 (12/27/2022)
+
+Created the UPMEM: Python + C backend for Spiral. Removed the Cython backend. The efficiency of compiled union patterns has been largely improved. 
+
+* A bug where union and regular patterns couldn't be mixed has been fixed.
+* Macros can now be started with an apostrophe. For example: $'qwe' is the same as $"qwe".
+* Various minor under the hood improvements.
+
+2.3.0 (12/21/2022)
+
+Created the Python backend for Spiral.
+
+* Optimized the EQ and NEQ case in the partial evaluator.
+
+2.2.7 (12/21/2022)
+
+* Added minor unused var optimization in union unboxing.
+
+2.2.5/2.2.6 (12/20/2022)
+
+* Some more work on ref counting part of the C backend. The semantics have changed - trying to read from unitialized arrays will cause null pointer fault now.
+* Accidentally published as 2.2.6 on OVSX, so I'll skip a patch version next time. 2.2.6 is the same as 2.2.5.
+
+2.2.4 (12/18/2022)
+
+* Redesigned how ref counting works in the C backend. Fixed a bug related to increfing not happening at the ends of if branches.
+
+2.2.3 (7/22/2022)
+
+* Fixed a C backend bug related to arrays.
+
+2.2.2 (7/17/2022)
+
+* Ordered the fields from largest to smallest in tuple, closure and layout structs.
+
+2.2.1 (7/15/2022)
+
+* Fixed the string length bug in C backend. The null character was being counted incorrectly.
+
+2.2.0 (7/13/2022)
+
+Created the C backend for Spiral.
+
+* This involved making some changes in `seq_apply` in the partial evaluator module which will affect the other codegens, so the resulting code will be more verbose.
+* Since it creates extra statements for strings, the Cython backend will be a bit slower too.
+
+2.1.11 (8/24/2021)
+
+* Fixed the broken bitwise ops in the F# codegen.
+
+2.1.10 (8/24/2021)
+
+* Added the Conv op.
+
+2.1.9 (8/22/2021)
+
+* Missed an edge case in the previous fix.
+
+2.1.8 (8/22/2021)
+
+* Fixed a minor editor support regression is macro tokenization.
+
+2.1.7 (8/21/2021)
+
+* Default int for the real segment is i32 again.
+* Added the `iam` (inverse array) module to the core library.
+* Change record_foldl and record_foldr, to record_fold and record_fold_back so they match F#'s naming scheme rather than Haskell's. Ditto for record_type.
+
+2.1.6 (8/18/2021)
+
+Fsharp codegen fixes.
+
+* I was surprised to find the F# compiler not accepting empty records as valid types. Fixed.
+* Indexing into unit record fields no longer produces useless `()`s in the generated code so it looks nicer.
+* Simplified the way 32 bit arrays are created in generated code.
+
+2.1.5 (8/17/2021)
+
+* Fixed the crash bug during type inference of mutually recursive unions.
+
+2.1.4 (8/15/2021)
+
+Finishing what I started yesterday.
+
+* Prototypes functions now show comments on hover.
+* Improved the way comments are printed in module hover.
+* Fixed a bug in type annotations involving modules.
+* Result of a symbol application show up on hover in type annotations.
+
+2.1.3 (8/14/2021)
+
+User experience improvements.
+
+* Literal suffixes are colored as keywords instead of numbers. This makes it easier to distinguish them from the actual number.
+* !! and `` are valid syntax in macros.
+* Module entries get printed on a separate lines instead of like records.
+* Unapplied modules show up on hover.
+* The result of a record application shows up when hovering over the symbol.
+* Function comments show up on module hover.
+* Comments get printed similarly to in Python. Newlines are erased, and empty lines are instead printed as newlines.
+
+2.1.2 (8/13/2021)
+
+* Module indexing in nominal patterns.
+
+2.1.1 (8/8/2021)
+
+* The type hover inside a list has been fixed. I introduced a regression while doing 2.1.0.
+
+2.1.0 (8/6/2021)
+
+* Major change: Removed the symbol paired pattern and related renamings for it from the language due to it being an eyesore and causing confusion.
+* Major change: The union pattern syntax is now like F#'s. The argument to the union can be ommitted in which case it is assumed to be wildcard. `| Some => ...` is the same as `| Some _ => ...`.
+* Minor change: Removed the record paired symbol application that I haven't used even once.
+* Minor change: Removed core and replaced it with core2.
+* Minor change: Instead of the paired symbol pattern, the Record ops now use records. The same goes for core functions in general.
+* Patch: Added the `limit` module and removed `limit_min` and `limit_max` modules from core.
+
+This update does not add anything to the language and just gets rid of the low quality experimental syntax. It only increased the complexity of the language and just made the implementation more difficult along with causing ambiguity for the user. Now the variables you type are the variables that are under the hood. No more spurious renaming. The paired symbol pattern would have made some sense if I was doing programming in the bottom up where records are leaky, but I am doing so little programming in that part that it does not matter.
+
+The record symbol application was already broken as it is due to the inference engine not being able to fill in the type variables during module application. Along with it not being used, it is prime material for the chopping block.
+
+The design of Spiral should be fairly vanilla now and that is good. I've been comparing the ease of use of Spiral to F# and Python, and the extra bit of complexity the paired symbol pattern introduced pushed Spiral into negative. Writing Spiral code should feel smoother now. Later on, not having to deal with this complexity will make it easier to implement autocomplete and renaming.
+
+Fixing the library and the project I am working on is easy, but what will I do about the docs? Being the only user does not give me much incentive to work on it, so I'll leave a note that the symbol paired pattern no longer works in the news.
+
+2.0.92 (7/6/2021)
+
+* Added the signed int (sint) constraint into the language.
+
+2.0.91 (7/2/2021)
+
+* Fixed a bug in array `filter` and `choose`.
+
+2.0.90 (7/2/2021)
+
+* Fixed a variable shadowing bug when filling in the type annotation of default values in patterns.
+
+2.0.89 (7/1/2021)
+
+* Added `clear` to the `rm` module.
+* Extended the PrintStatic op so it can print raw types.
+* Adjusted the F# and the Cython codegen so that the floats get printed without loss of precision.
+
+2.0.88 (6/15/2021)
+
+* I was too hasty in fixing the codegen bug and introduced a performance bug instead. Now it should be fixed properly.
+
+2.0.87 (6/15/2021)
+
+* Fixed the length Cython codegen bug when using arrays other than u64/i64.
+
+2.0.86 (6/8/2021)
+
+* Renamed array's iter2i to iteri2 so it matches the F# naming scheme.
+* Added `3` and `4` versions of `map` and `iter` function into the array module.
+* Since tail recursive loops keep stack overflowing in Cython, the array module now uses the imperative while loops instead.
+* Added `CythonToNamedTuple` op, the `record` constraint and fixed the lack of dyning bug in `CythonToRecord`'s partial evaluation case.
+* Added the `namedtuple` function to core. This should help Python interop as it provides a succinct way of converting Spiral records into Python objects.
+* `except *` now does not get generated on main functions returning objects. The Cython codegen is a rat's nest of hacks due to all the non-composable features of Cython.
+* Changed the semantics of the Cython codegen so closure arguments now behave like those for regular join points. This should make interop easier.
+* For unknown reasons, the language server will sometimes rarely miss a heartbeat and terminate. I haven't resolved the reason for that yet, but the `Restart Server` command should now work properly as it will clear the previous request instead of waiting for it to finish.
+
+2.0.85 (5/22/2021)
+
+Minor fixes. I'll start keeping a changelog from here as development on the compiler has stabilized. For the previous versions, the commit history can serve as the changelog. I have a bunch of stuff on the TODO list, but don't have much drive to work on them at this time. At this point the compiler itself is good enough.
+
+* Added mapi and mapi2 to the `am` module of the `core2` package.
+* Fixed filter so it passes the actual element instead of the index.

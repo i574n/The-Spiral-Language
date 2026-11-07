@@ -1,0 +1,14 @@
+diff --git a/The Spiral Language 2/CodegenC.fs b/The Spiral Language 2/CodegenC.fs
+index 6f96a40..3402e6b 100644
+--- a/The Spiral Language 2/CodegenC.fs	
++++ b/The Spiral Language 2/CodegenC.fs	
+@@ -470,8 +470,7 @@ let codegen (env : PartEvalResult) (x : TypedBind []) =
+             $"ArrayLit{(carray a).tag}({b'.Length}, ({tup_ty a} []){b})" |> return'
+         | TyArrayCreate(a,b) -> 
+             let a = carray a
+-            let is_heap : string = is_heap (env.ty_to_data >> data_free_vars) a.tyvs |> sprintf "%b"
+-            $"ArrayCreate{a.tag}({tup_data b}, {is_heap})" |> return'
++            $"ArrayCreate{a.tag}({tup_data b}, true)" |> return'
+         | TyFailwith(a,b) -> 
+             let fmt = @"%s\n"
+             line s $"fprintf(stderr, \"{fmt}\", {string_in_op b});"

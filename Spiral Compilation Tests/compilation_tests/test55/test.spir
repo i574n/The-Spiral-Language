@@ -1,0 +1,9 @@
+// Does the typecase work?
+inl main () =
+    typecase array {q : i32} with
+    | array ~t =>
+        typecase t with
+        | f64 => 1
+        | i32 => 11
+        | {q : _} => 5
+        | i32 * f64 => "zxc"

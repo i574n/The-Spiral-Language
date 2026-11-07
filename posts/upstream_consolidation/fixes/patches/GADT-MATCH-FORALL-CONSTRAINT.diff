@@ -1,0 +1,23 @@
+diff --git a/The Spiral Language 2/Infer.fs b/The Spiral Language 2/Infer.fs
+index fd8980d..a6b9bfa 100644
+--- a/The Spiral Language 2/Infer.fs	
++++ b/The Spiral Language 2/Infer.fs	
+@@ -1147,6 +1147,18 @@ let infer package_id module_id (top_env' : TopEnv) expr =
+                 | [] -> link := Some b
+                 | constraint_errors -> raise (TypeErrorException (List.map (fun x -> r,x) constraint_errors))
+             | TyVar (a,_), TyVar (b,_) when a = b -> ()
++            | TyVar (va,la), TyVar (vb,lb) when gadt_links.IsSome && va.scope <> vb.scope ->
++                let ta, tb = visit_t a'', visit_t b''
++                let inner_var, inner_link, outer_ty, outer_var, outer_link, inner_ty =
++                    if va.scope > vb.scope then va, la, tb, vb, lb, ta else vb, lb, ta, va, la, tb
++                validate_tvar_unification inner_var outer_ty
++                unify_kind inner_var.kind (tt top_env outer_ty)
++                match constraint_process inner_var.constraints outer_ty with
++                | [] -> inner_link := Some outer_ty; gadt_links.Value.Add(inner_link)
++                | _ ->
++                    match constraint_process outer_var.constraints inner_ty with
++                    | [] -> outer_link := Some inner_ty; gadt_links.Value.Add(outer_link)
++                    | constraint_errors -> raise (TypeErrorException (List.map (fun x -> r,x) constraint_errors))
+             | TyVar (a,link), b | b, TyVar (a,link) when gadt_links.IsSome ->
+                 validate_tvar_unification a b
+                 unify_kind a.kind (tt top_env b)

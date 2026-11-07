@@ -1,0 +1,233 @@
+diff --git a/The Spiral Language 2/CodegenC.fs b/The Spiral Language 2/CodegenC.fs
+index 6f96a40..ddc2c81 100644
+--- a/The Spiral Language 2/CodegenC.fs	
++++ b/The Spiral Language 2/CodegenC.fs	
+@@ -179,8 +179,22 @@ let codegen (env : PartEvalResult) (x : TypedBind []) =
+     let import' x = global' $"#include \"{x}\""
+ 
+     let tyvs_to_tys (x : TyV []) = Array.map (fun (L(i,t)) -> t) x
++    let self_loop : (int * TyV [] * int) option ref = ref None
++    let self_continue_release : (CodegenEnv -> unit) ref = ref ignore
++    let self_let_tail_target : (TyV [] * (CodegenEnv -> unit)) option ref = ref None
++    let method_key_of_tag = Dictionary<int, obj>()
+     
+     let rec binds_start (args : TyV []) (s : string_builder_env) (x : TypedBind []) = binds (refc_prepass Set.empty (Set args) x) s BindsTailEnd x
++    and self_continue (s : CodegenEnv) (parameters : TyV []) (args : TyV []) =
++        if parameters.Length > 0 then
++            line s "{"
++            let temps = Array.map2 (fun (L(_,t)) (L(j,_)) -> let k = tmp() in line (indent s) $"{tyv t} tmp{k} = v{j};"; k) parameters args
++            self_continue_release.Value (indent s)
++            Array.iteri (fun position k -> line (indent s) $"v{position} = tmp{k};") temps
++            line s "}"
++        else
++            self_continue_release.Value s
++        line s "continue;"
+     and return_local s ret (x : string) = 
+         match ret with
+         | [||] -> line s $"{x};"
+@@ -196,16 +210,57 @@ let codegen (env : PartEvalResult) (x : TypedBind []) =
+                 | WLit b -> $"v{i} = {lit b};"
+                 | WV (L(i',_)) -> $"v{i} = v{i'};"
+                 ) a b
+-        Array.iter (fun x ->
+-            // This complicated looking piece of code is responsible for putting the incref and decref statements at the beginning of every
+-            // statement. It's actually the only place where ref counting code is outputted in the codegen.
+-            let _ =
++        let heap_free (vars : TyV seq) = not (is_heap (env.ty_to_data >> data_free_vars) (Seq.toArray vars))
++        let outer_tail_release =
++            match ret, self_let_tail_target.Value with
++            | BindsTailEnd, _ -> Some ignore
++            | BindsLocal l, Some (target, release) when l = target -> Some release
++            | _ -> None
++        let self_let_tail =
++            match outer_tail_release, self_loop.Value with
++            | Some _, Some (tag, parameters, depth) when depth = fns_printing.Count && stmts.Length >= 2 ->
++                match stmts.[stmts.Length - 2], stmts.[stmts.Length - 1] with
++                | (TyLet(d,_,a) as call), (TyLocalReturnData(r,_) as last) when returns_unchanged d r && op_self_tail tag a ->
++                    let touched =
++                        Seq.concat [
++                            Seq.ofList (Set.toList (get_default vars.g_incr last (fun () -> Set.empty)))
++                            Seq.ofList (Set.toList (get_default vars.g_decr last (fun () -> Set.empty)))
++                            Seq.ofList (Set.toList (get_default vars.g_op_decr last (fun () -> Set.empty)))
++                            Seq.ofList (Map.toList (get_default vars.g_op last (fun () -> Map.empty)) |> List.map fst)
++                            ]
++                    let direct_self_call = match a with TyJoinPoint(JPMethod(x,c),_) -> is_method_tag tag (x, c) | _ -> false
++                    let at_function_tail = match ret with BindsTailEnd -> true | _ -> false
++                    if direct_self_call || (at_function_tail && heap_free touched) then Some (call, last, parameters, a) else None
++                | _ -> None
++            | _ -> None
++        let kept_let_tail =
++            match outer_tail_release, self_loop.Value, self_let_tail with
++            | Some outer, Some (tag, _, depth), None when depth = fns_printing.Count && stmts.Length >= 2 ->
++                match stmts.[stmts.Length - 2], stmts.[stmts.Length - 1] with
++                | (TyLet(d,_,a) as call), (TyLocalReturnData(r,_) as last) when returns_unchanged d r && op_self_tail tag a && (data_free_vars d).Length > 0 -> Some (call, last, outer)
++                | _ -> None
++            | _ -> None
++        let stmts =
++            match self_let_tail with
++            | Some (_, last, _, _) -> stmts |> Array.filter (fun x -> not (obj.ReferenceEquals(x, last)))
++            | None -> stmts
++        let refc_prefix (s : CodegenEnv) x =
+                 let f k = get_default k x (fun () -> Set.empty)
+                 let f' k = get_default k x (fun () -> Map.empty)
+                 let incr, decr, op, op_decr = varc_set (f vars.g_incr) 1, varc_set (f vars.g_decr) -1, f' vars.g_op, varc_set (f vars.g_op_decr) -1
+                 let incr, decr = varc_union incr decr |> varc_union op |> varc_union op_decr |> Map.partition (fun _ v -> 0 < v)
+                 refc_varc incr |> line' s; refc_varc decr |> line' s
++        Array.iter (fun x ->
++            refc_prefix s x
+             match x with
++            | TyLet _ when (match self_let_tail with Some (call, _, _, _) -> obj.ReferenceEquals(x, call) | None -> false) ->
++                let _, last, _, a = self_let_tail.Value
++                let direct_self_call = match a with TyJoinPoint _ -> true | _ -> false
++                let outer = Option.defaultValue ignore outer_tail_release
++                let saved_release = self_continue_release.Value
++                self_continue_release.Value <- if direct_self_call then (fun s -> refc_prefix s last; outer s) else ignore
++                op vars s BindsTailEnd a
++                self_continue_release.Value <- saved_release
+             | TyLet(d,trace,a) ->
+                 try let d = data_free_vars d
+                     let decl_vars = Array.map (fun (L(i,t)) -> $"{tyv t} v{i};") d
+@@ -226,7 +281,13 @@ let codegen (env : PartEvalResult) (x : TypedBind []) =
+                                 raise_codegen_error "The special \\v macro requires the same number of free vars in its binding as there are \\v in the code."
+                     | _ ->
+                         decl_vars |> line' s
++                        match kept_let_tail with
++                        | Some (call, last, outer) when obj.ReferenceEquals(x, call) ->
++                            let saved_target = self_let_tail_target.Value
++                            self_let_tail_target.Value <- Some (d, fun s -> refc_prefix s last; outer s)
+                         op vars s (BindsLocal d) a
++                            self_let_tail_target.Value <- saved_target
++                        | _ -> op vars s (BindsLocal d) a
+                 with :? CodegenError as e -> raise_codegen_error' trace (e.Data0, e.Data1)
+             | TyLocalReturnOp(trace,a,_) ->
+                 try op vars s ret a
+@@ -247,6 +308,7 @@ let codegen (env : PartEvalResult) (x : TypedBind []) =
+         match t' with
+         | YUnion t -> 
+             match t.Item.layout with
++            | UStack when ((ustack t : UnionRecC).free_vars : Map<int * string, TyV[]>) |> Map.forall (fun _ (fields : TyV[]) -> fields |> Array.forall (fun field -> Option.isNone (refc_change'' f 1 field))) -> None
+             | UStack -> 
+                 if count = -1 then Some $"USDecref{(ustack t).tag}(&({f v}));"
+                 elif 0 < count then Some (String.replicate count $"USIncref{(ustack t).tag}(&({f v}));")
+@@ -373,6 +435,16 @@ let codegen (env : PartEvalResult) (x : TypedBind []) =
+             line s "} else {"
+             binds (indent s) ret fl
+             line s "}"
++        | TyJoinPoint(JPMethod(a,b),args) when (match ret, self_loop.Value, self_let_tail_target.Value with BindsLocal l, Some (tag, _, depth), Some (target, _) -> depth = fns_printing.Count && l = target && is_method_tag tag (a, b) | _ -> false) ->
++            let _, parameters, _ = self_loop.Value.Value
++            let _, release = self_let_tail_target.Value.Value
++            let saved_release = self_continue_release.Value
++            self_continue_release.Value <- release
++            self_continue s parameters args
++            self_continue_release.Value <- saved_release
++        | TyJoinPoint(JPMethod(a,b),args) when (match ret, self_loop.Value with BindsTailEnd, Some (tag, _, depth) -> depth = fns_printing.Count && is_method_tag tag (a, b) | _ -> false) ->
++            let _, parameters, _ = self_loop.Value.Value
++            self_continue s parameters args
+         | TyJoinPoint(a,args) -> return' (jp (a, args))
+         | TyBackend(_,_,r) -> raise_codegen_error_backend r "The C backend does not support nesting of other backends."
+         | TyWhile(a,b) ->
+@@ -470,8 +542,7 @@ let codegen (env : PartEvalResult) (x : TypedBind []) =
+             $"ArrayLit{(carray a).tag}({b'.Length}, ({tup_ty a} []){b})" |> return'
+         | TyArrayCreate(a,b) -> 
+             let a = carray a
+-            let is_heap : string = is_heap (env.ty_to_data >> data_free_vars) a.tyvs |> sprintf "%b"
+-            $"ArrayCreate{a.tag}({tup_data b}, {is_heap})" |> return'
++            $"ArrayCreate{a.tag}({tup_data b}, true)" |> return'
+         | TyFailwith(a,b) -> 
+             let fmt = @"%s\n"
+             line s $"fprintf(stderr, \"{fmt}\", {string_in_op b});"
+@@ -547,6 +618,7 @@ let codegen (env : PartEvalResult) (x : TypedBind []) =
+         order_args v |> Array.iter (fun (L(i,x)) -> line s $"{tyv x} v{i};")
+     and method_templ is_while fun_name : _ -> MethodRec =
+         jp (fun ((jp_body,key & (C(args,_))),i) ->
++            method_key_of_tag.[i] <- box (jp_body, key)
+             match (fst env.join_point_method.[jp_body]).[key] with
+             | Some a, Some range, name -> {tag=i; free_vars=rdata_free_vars args; range=range; body=a; name=name}
+             | _ -> raise_codegen_error "Compiler error: The method dictionary is malformed"
+@@ -555,9 +627,49 @@ let codegen (env : PartEvalResult) (x : TypedBind []) =
+             let args = x.free_vars |> Array.mapi (fun i (L(_,x)) -> $"{tyv x} v{i}") |> String.concat ", "
+             let fun_name = Option.defaultValue fun_name x.name
+             line s_fun (sprintf "%s %s%i(%s){" ret_ty fun_name x.tag args)
++            let saved = self_loop.Value
++            let saved_release = self_continue_release.Value
++            let saved_target = self_let_tail_target.Value
++            self_continue_release.Value <- ignore
++            self_let_tail_target.Value <- None
++            if not is_while && self_tail x.tag x.body then
++                self_loop.Value <- Some (x.tag, x.free_vars, fns_printing.Count)
++                line (indent s_fun) "while (1) {"
++                binds_start x.free_vars (indent (indent s_fun)) x.body
++                line (indent s_fun) "}"
++            else
++                self_loop.Value <- None
+             binds_start (if is_while then [||] else x.free_vars) (indent s_fun) x.body
++            self_loop.Value <- saved
++            self_continue_release.Value <- saved_release
++            self_let_tail_target.Value <- saved_target
+             line s_fun "}"
+             )
++    and self_tail tag (body : TypedBind []) =
++        body.Length > 0 &&
++        match Array.last body with
++        | TyLocalReturnOp(_, a, _) -> op_self_tail tag a
++        | TyLocalReturnData(r,_) when body.Length >= 2 ->
++            match body.[body.Length - 2] with
++            | TyLet(d,_,a) when returns_unchanged d r -> op_self_tail tag a
++            | _ -> false
++        | _ -> false
++    and op_self_tail tag (a : TypedOp) =
++        match a with
++        | TyJoinPoint(JPMethod(x,c),_) -> is_method_tag tag (x, c)
++        | TyIf(_,tr,fl) -> self_tail tag tr || self_tail tag fl
++        | TyUnionUnbox(_,_,on_succs,on_fail) -> (on_succs |> Map.exists (fun _ (_,b) -> self_tail tag b)) || (on_fail |> Option.exists (self_tail tag))
++        | TyIntSwitch(_,on_succ,on_fail) -> Array.exists (self_tail tag) on_succ || self_tail tag on_fail
++        | TyDo b | TyIndent b -> self_tail tag b
++        | _ -> false
++    and returns_unchanged d r =
++        let bound = data_free_vars d
++        let returned = data_term_vars r
++        bound.Length = returned.Length && Array.forall2 (fun (L(i,_)) w -> match w with WV(L(j,_)) -> i = j | WLit _ -> false) bound returned
++    and is_method_tag tag (x, c) =
++        match method_key_of_tag.TryGetValue tag with
++        | true, k -> k.Equals(box (x, c))
++        | _ -> false
+     and method_while : _ -> MethodRec = method_templ true "method_while"
+     and method : _ -> MethodRec = method_templ false "method"
+     and closure : _ -> ClosureRec =
+@@ -770,6 +882,36 @@ let codegen (env : PartEvalResult) (x : TypedBind []) =
+                 line s_fun (sprintf "void USDecref%i(US%i * x){ USDecrefBody%i(x); }" i i i)
+             | false -> 
+                 line s_fwd (sprintf "void UHDecref%i(UH%i * x);" i i)
++                let is_same_union (L(_,t)) = match t with YUnion u -> u.Item.layout = UHeap && (uheap u).tag = i | _ -> false
++                if x.free_vars |> Map.exists (fun _ v -> Array.exists is_same_union v) then
++                    line s_fun (sprintf "void UHDecref%i(UH%i * x){" i i)
++                    let _ =
++                        let s_fun = indent s_fun
++                        line s_fun "while (x != NULL && --(x->refc) == 0) {"
++                        let _ =
++                            let s_fun = indent s_fun
++                            line s_fun (sprintf "UH%i * next = NULL;" i)
++                            line s_fun "switch (x->tag) {"
++                            map_iteri (fun tag k v ->
++                                let s_fun = indent s_fun
++                                let next_field = v |> Array.tryFindBack is_same_union
++                                let others = v |> Array.filter (fun field -> Some field <> next_field)
++                                let refc = others |> refc_change (fun i -> $"x->case{tag}.v{i}") -1
++                                if refc.Length <> 0 || next_field.IsSome then
++                                    line s_fun (sprintf "case %i: {" tag)
++                                    let _ =
++                                        let s_fun = indent s_fun
++                                        refc |> line' s_fun
++                                        next_field |> Option.iter (fun (L(field,_)) -> line s_fun $"next = x->case{tag}.v{field};")
++                                        line s_fun "break;"
++                                    line s_fun "}"
++                                ) x.free_vars
++                            line s_fun "}"
++                            line s_fun $"{free}(x);"
++                            line s_fun "x = next;"
++                        line s_fun "}"
++                    line s_fun "}"
++                else
+                 print_decref s_fun $"UHDecref{i}" $"UH{i}" $"UHDecrefBody{i}"
+             
+             map_iteri (fun tag k v -> 

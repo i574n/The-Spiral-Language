@@ -1,0 +1,11 @@
+out
+dist
+compiler
+node_modules
+.fake
+.ionide
+*.vsix
+keys.json
+
+readme.md
+spiral_logo.png

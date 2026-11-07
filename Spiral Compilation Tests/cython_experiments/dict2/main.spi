@@ -1,0 +1,35 @@
+open dict
+inl test1 () =
+    let test l =
+        inl x = empty
+        listm.iter (fun (k,v) => add x k v) l
+        inl l : ra u64 string = 
+            listm.map (fun (k,_) => index x k |> fun x => real
+                match x with
+                | () => "()"
+                | x => $"str(!x)" : string
+                ) l |> listm.toArray
+        inl r = rm.join' ", " l
+        $"print(!r)"
+    inl l = ["asd",4; "qwe", 6; "zxc", 9u32]
+    test l
+    test (listm.map (fun (k,v) => v,k) l |> listm.rev)
+
+    test (listm.map (fun (k,_) => k,()) l)
+    test (listm.map (fun (_,v) => v,()) l)
+
+inl test1 () =
+    let test l =
+        inl x = empty
+        listm.iter (fun (k,v) => add x k v) l
+        fold (fun s (_,v) => s+v) 0 x
+    inl l = ["asd",4; "qwe", 6; "zxc", 9u32]
+    inl r = test l
+    $"print(!r)"
+
+inl main () : () =
+    [1u32,"zxc"; 2,"asd"; 3,"qwe"]
+    |> listm.toArray |> fun (x : a _ _) => x
+    |> fromArray
+    |> toArray |> fun (x : a _ _) => x
+    |> am.iter (fun (k,v) => $"print(!k,!v)")

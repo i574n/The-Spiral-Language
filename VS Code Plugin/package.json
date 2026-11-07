@@ -1,0 +1,184 @@
+{
+	"name": "spiral-lang-vscode-i574n",
+	"displayName": "The Spiral Language (i574n)",
+	"version": "2.15.19",
+	"description": "[Notebooks Fork] VS Code editor support plugin + the Spiral language compiler.",
+	"repository": {
+		"url": "https://github.com/i574n/The-Spiral-Language"
+	},
+	"publisher": "i574n",
+	"author": "Marko Grdinić",
+	"engines": {
+		"vscode": "^1.95.0"
+	},
+	"module": "true",
+	"main": "out/index.js",
+	"activationEvents": [
+		"onNotebook:dotnet-interactive",
+		"onNotebook:dotnet-interactive-window",
+		"onNotebook:jupyter-notebook",
+		"onNotebook:polyglot-notebook",
+		"onNotebook:polyglot-notebook-window",
+		"onNotebook:jupyter-notebook",
+		"onCommand:dotnet-interactive.acquire",
+		"onCommand:polyglot-notebook.fileNew",
+		"onCommand:polyglot-notebook.newNotebook",
+		"onCommand:polyglot-notebook.openNotebook",
+		"onCommand:polyglot-notebook.saveAsNotebook",
+		"onView:polyglot-notebook-panel-values"
+	],
+	"contributes": {
+		"configuration": {
+			"title": "Spiral Configuration",
+			"properties": {
+				"spiral.hideTerminal": {
+					"type": "boolean",
+					"default": false,
+					"description": "Hide the server terminal."
+				},
+				"spiral.port": {
+					"type": "integer",
+					"default": 0,
+					"description": "The HTTP port the editor communicates with a the server. VS Code needs to be restarted for this change to take effect. If this value is set to 0 then a free port will be allocated dynamically, starting from 8000."
+				},
+				"spiral.errorTraceMaxLength": {
+					"type": "integer",
+					"default": 5,
+					"description": "The maximum length of the partial evaluation and codegen error traces."
+				},
+				"spiral.backend": {
+					"type": "string",
+					"enum": [
+						"Fsharp",
+						"C",
+						"Python + Cuda",
+						"Cpp + Cuda"
+					],
+					"default": "Fsharp",
+					"description": "The code generator that will be used when the file is built."
+				},
+				"spiral.default_int": {
+					"type": "string",
+					"enum": [
+						"i8",
+						"i16",
+						"i32",
+						"i64",
+						"u8",
+						"u16",
+						"u32",
+						"u64"
+					],
+					"default": "i32",
+					"description": "What the type level and bottom-up integer literals without specified suffixes get parsed as. Also determines the type of `int` at the start of the program. Based on this type, an equivalent unsigned integer `uint` is automatically derived. If the default int is unsigned then `int` and `uint` are the same. Changes to this property require a language server restart."
+				},
+				"spiral.default_float": {
+					"type": "string",
+					"enum": [
+						"f32",
+						"f64"
+					],
+					"default": "f32",
+					"description": "What the type level and bottom-up float literals without specified suffixes get parsed as. Also determines the type of `float` at the start of the program. Changes to this property require a language server restart."
+				}
+			}
+		},
+		"commands": [
+			{
+				"command": "buildFile",
+				"title": "Build File",
+				"category": "Spiral"
+			},
+			{
+				"command": "startServer",
+				"title": "Start Server",
+				"category": "Spiral"
+			},
+			{
+				"command": "showConnectionStatus",
+				"title": "Show Connection Status",
+				"category": "Spiral"
+			},
+			{
+				"command": "startServerHidden",
+				"title": "Start Server (Hidden)",
+				"category": "Spiral"
+			}
+		],
+		"languages": [
+			{
+				"id": "spiral",
+				"configuration": "./language-configuration.json",
+				"extensions": [
+					".spi",
+					".spir",
+					".dib",
+					".spiproj"
+				],
+				"aliases": [
+					"Spiral"
+				]
+			}
+		],
+		"semanticTokenTypes": [
+			{
+				"id": "symbol",
+				"superType": "member",
+				"description": "A compile-time symbol."
+			},
+			{
+				"id": "unary_operator",
+				"superType": "class",
+				"description": "An unary operator."
+			},
+			{
+				"id": "type_variable",
+				"superType": "type",
+				"description": "A type variable."
+			},
+			{
+				"id": "escaped_char",
+				"superType": "operator",
+				"description": "Escaped character."
+			},
+			{
+				"id": "unescaped_char",
+				"superType": "member",
+				"description": "Unescaped character."
+			},
+			{
+				"id": "number_suffix",
+				"superType": "keyword",
+				"description": "The suffix for a number."
+			},
+			{
+				"id": "escaped_var",
+				"superType": "keyword",
+				"description": "The escaped variable in a term macro."
+			}
+		]
+	},
+	"scripts": {
+		"outdated-pre": "npm-check-updates --target greatest",
+		"_vscode:prepublish": "~/.bun/bin/bun --bun esbuild-base -- --minify",
+		"esbuild-base": "~/.bun/bin/bunx --bun esbuild ./src/index.ts --bundle --outfile=out/index.js --external:vscode --format=cjs --platform=node",
+		"esbuild": "~/.bun/bin/bun --bun esbuild-base -- --sourcemap",
+		"esbuild-watch": "~/.bun/bin/bun --bun esbuild-base -- --sourcemap --watch",
+		"test-compile": "tsc -p ./"
+	},
+	"keywords": [
+		"spiral"
+	],
+	"devDependencies": {
+		"npm-check-updates": "~17.1.14",
+		"@types/node": "~22.10",
+		"@types/vscode": "~1.95",
+		"@vscode/vsce": "~3.2",
+		"esbuild": "^0.28.1",
+		"typescript": "next"
+	},
+	"dependencies": {
+		"@microsoft/signalr": "8.0.0",
+		"portfinder": "^1.0.32"
+	}
+}

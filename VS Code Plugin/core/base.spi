@@ -1,0 +1,86 @@
+prototype equable a : a -> a -> bool
+
+nominal order = i32
+prototype comparable a : a -> a -> order
+inl eq() = order 0i32
+inl eq_is (order x) : bool = !!!!EQ(x, 0i32)
+inl lt() = order -1i32
+inl lt_is (order x) : bool = !!!!EQ(x, -1i32)
+inl gt() = order 1i32
+inl gt_is (order x) : bool = !!!!EQ(x, 1i32)
+
+prototype hashable a : a -> u64
+
+union option a = Some : a | None
+union choice2 a b = C1of2 : a | C2of2 : b
+union result a b = Ok : a | Error : b
+union rec list a = Nil | Cons : a * list a
+// Concatenates an element to the head of a list.
+inl (::) a b = Cons (a,b)
+
+// Puts a statement in the global scope.
+inl global (x : string) : () = !!!!Global(x)
+
+nominal array t = array_base t
+
+// Creates an array.
+prototype create ar el : int -> ar el
+// Indexes into an array.
+prototype index ar el : ar el -> int -> el
+// Sets the value of an array at the specified index.
+prototype set ar el : ar el -> int -> el -> ()
+// Returns the length of an array.
+prototype length ar el : ar el -> int
+
+// Creates an array with a statically known dimension.
+prototype sa_create sa dim el : sa dim el
+// Indexes into an array.
+prototype sa_index sa dim el : sa dim el -> int -> el
+// Sets the value of an array at the specified index.
+prototype sa_set sa dim el : sa dim el -> int -> el -> ()
+// Returns the length of an array.
+prototype sa_length sa dim el : sa dim el -> int
+// Sets the length of the array to the specified value. Note that this should be used only during initialization as it will result in undefined values.
+prototype sa_list_unsafe_set_length sa dim el : sa dim el -> int -> ()
+
+
+instance create array = fun size => array !!!!ArrayCreate(`el,size)
+instance index array = fun (array ar) i => !!!!ArrayIndex(ar,i)
+instance set array = fun (array ar) i v => !!!!ArrayIndexSet(ar,i,v)
+instance length array = fun (array ar) => !!!!ArrayLength(`int,ar)
+
+nominal sizeof t = {value : int}
+inl sizeof forall t. : sizeof t = sizeof {
+    value = real !!!!Conv(`int, !!!!SizeOf(`t))
+    }
+
+nominal phantom t = ()
+
+
+nominal arg x = x
+
+type printable_funs =
+    {
+        write_ln : forall t. t -> ()
+        write : forall t. t -> ()
+    }
+
+prototype printable t : printable_funs -> t -> ()
+
+nominal some = ()
+nominal none = ()
+
+union dep_option g t =
+    | Some' :: forall t. t -> dep_option some t
+    | None' :: forall t. dep_option none t
+
+
+
+
+
+// The stand-in for the pointer type.
+type ptr = array u8
+// Sizes are 64-bit unsigned ints.
+type size = u64
+
+type range dim = {from : int; nearTo : dim; by : int}

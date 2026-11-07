@@ -1,0 +1,5 @@
+// Do higher ranked types work correctly?
+inl main() =
+    inl id forall t. (x : t) : t = x
+    inl f forall x. (id : forall t. t -> t) (x : x) : int * bool * float = id 1, id true, id 123
+    f `$id false

@@ -1,0 +1,21 @@
+modules:
+    base-
+    limit
+    real_core*
+    type_arith*
+    core-
+    compile_time/
+        types-
+        hashsetm
+        hashmapm
+        typed/
+            hashsetm
+            hashmapm
+    struct*
+    listm
+    loop
+    optionm
+    dep_optionm
+    monad
+    arraym
+    sm

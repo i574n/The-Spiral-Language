@@ -1,0 +1,12 @@
+diff --git a/The Spiral Language 2/WDiff.fs b/The Spiral Language 2/WDiff.fs
+index ee68d68..84390e3 100644
+--- a/The Spiral Language 2/WDiff.fs	
++++ b/The Spiral Language 2/WDiff.fs	
+@@ -104,6 +104,7 @@ let parse_block default_env is_top_down (block : LineTokens) =
+         tokens_cords = cords; semantic_updates = semantic_updates
+         comments = comments; tokens = tokens; i = ref 0; is_top_down = is_top_down
+         default_env = default_env
++        continuation_column = None
+         }
+     {result=parse env; semantic_tokens=semantic_updates_apply block semantic_updates}
+ 

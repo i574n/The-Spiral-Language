@@ -1,0 +1,35 @@
+diff --git a/The Spiral Language 2/BlockParsing.fs b/The Spiral Language 2/BlockParsing.fs
+index 20bd008..cc0e7b8 100644
+--- a/The Spiral Language 2/BlockParsing.fs	
++++ b/The Spiral Language 2/BlockParsing.fs	
+@@ -471,6 +471,7 @@ type Env = {
+     i : int ref
+     is_top_down : bool
+     default_env : Startup.DefaultEnv
++    continuation_column : int option
+     } with
+ 
+     member d.Index with get() = d.i.contents and set(i) = d.i := i
+@@ -1214,7 +1215,10 @@ and root_term d =
+                     ) d
+ 
+             (range (skip_keyword SpecFunction >>. clauses) |>> RawFun)
+-            <|> (range ((skip_keyword SpecMatch >>. next .>> skip_keyword SpecWith) .>>. clauses) |>> fun (a,(b,c)) -> RawMatch(a,b,c))
++            <|> (fun d ->
++                    let match_column = col d
++                    let scrutinee d = next {d with continuation_column = Some match_column}
++                    (range ((skip_keyword SpecMatch >>. scrutinee .>> skip_keyword SpecWith) .>>. clauses) |>> fun (a,(b,c)) -> RawMatch(a,b,c)) d)
+ 
+         let case_typecase d =
+             let clauses d = 
+@@ -1340,7 +1344,9 @@ and root_term d =
+ 
+     and application (d: Env) =
+         let next = unary_op
+-        pipe2 next (many (indent (col d) (<) next)) (List.fold (fun a b -> RawApply(range_of_expr a +. range_of_expr b,a,b))) d
++        let column = match d.continuation_column with Some floor -> min floor (col d) | None -> col d
++        let d = {d with continuation_column = None}
++        pipe2 next (many (indent column (<) next)) (List.fold (fun a b -> RawApply(range_of_expr a +. range_of_expr b,a,b))) d
+ 
+     and operators d =
+         let term = application

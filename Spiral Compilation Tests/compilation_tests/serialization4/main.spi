@@ -1,0 +1,46 @@
+open pickle
+nominal serialized t = a u32 f32
+
+inl serialize forall t. (pu p : pu t) (x : t) : serialized t =
+    inl ar = create p.size
+    // $"!ar[:] = 0"
+    p.pickle x (0,ar)
+    // $"printfn \"%A\" !ar"
+    serialized ar
+
+inl deserialize forall t. (pu p : pu t) (serialized x : serialized t) : t =
+    inl x,c = p.unpickle (0,x)
+    if c <> 1 then failwith "Invalid format."
+    x
+
+inl test scheme x = assert (x = deserialize scheme (serialize scheme x)) "Serialization and deserialization should result in the same result."
+inl (**) a b = pair a b
+
+union action =
+    | Raise : u32 // `Raise: 0` would be a raise of 1 in the actual game.
+    | Call
+    | NoAction
+type rank = u32
+type suit = u32
+type card = rank * suit
+type player_view = {
+    stack_self : u32
+    stack_opp : u32
+    pot : u32
+    hand : card * card
+    prev_action : action
+    }
+
+inl action() : pu action = alt {Raise=u32 4; Call=unit(); NoAction=unit()}
+inl card() = u32 13 ** u32 4
+inl playerView max_stack : pu player_view = 
+    inl a (stack_self,stack_opp,pot,hand,prev_action) = {stack_self stack_opp pot hand prev_action}
+    inl b {stack_self stack_opp pot hand prev_action} = (stack_self,stack_opp,pot,hand,prev_action)
+    wrap (a,b) (u32 max_stack ** u32 max_stack ** u32 max_stack ** (card() ** card()) ** action())
+
+inl test_view max_stack = 
+    inl scheme = playerView (max_stack+1)
+    inl ~x = {stack_self=max_stack/2; stack_opp=max_stack/2; pot=max_stack; hand=(0,1),(12,3); prev_action=NoAction}
+    test scheme x
+
+inl main () = join test_view 10 . 0i32

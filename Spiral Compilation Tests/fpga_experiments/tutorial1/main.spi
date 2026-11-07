@@ -1,0 +1,12 @@
+inl rec fold f s l =
+    inl body s l =
+        match l with
+        | x :: xs => fold f (f s x) xs
+        | [] => s
+    if var_is l then 
+        inl ~s = s
+        join body s l
+    else 
+        body s l
+
+inl main() : i32 = fold (+) 0 (1 :: 2 :: 3 :: dyn [4;5;6])

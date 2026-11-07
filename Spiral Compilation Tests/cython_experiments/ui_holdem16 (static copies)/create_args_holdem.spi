@@ -1,0 +1,193 @@
+inl ui (player_op : ra u64 _ -> a u64 _ * (a u64 r2 -> a u64 r2)) (game_mode,sb,bb,stack,human_pid,set) : () =
+    open hand_scorer
+
+    let show_card (x : card) : string =
+        inl suit,rank = suit x, rank x
+        inl rank =
+            match rank with
+            | 12 => 'A'
+            | 11 => 'K'
+            | 10 => 'Q'
+            | 9 => 'J'
+            | 8 => 'T'
+            | _ => $"str(2 + !rank)"
+        inl suit =
+            match suit with
+            | 0 => "[color=ff0000]" // heart
+            | 1 => "[color=00ff00]" // club
+            | 2 => "[color=0000ff]" // diamond
+            | _ => "[color=ffff00]" // spade
+        $"f'{!suit}{!rank}[/color]'"
+
+    let show_score = function
+        | 0 => "high card"
+        | 1 => "pair"
+        | 2 => "two pair"
+        | 3 => "triple"
+        | 4 => "straight"
+        | 5 => "flush"
+        | 6 => "full house"
+        | 7 => "four of a kind"
+        | 8 => "straight flush"
+        | _ => failwith "Invalid card score."
+
+    let show_complete_hand (c1,c2,c3,c4,c5) : string =
+        inl c1,c2,c3,c4,c5 = show_card c1, show_card c2, show_card c3, show_card c4, show_card c5
+        $"f'{!c1}{!c2}{!c3}{!c4}{!c5}'"
+
+    let show_hand (c1,c2) : string =
+        inl c1,c2 = show_card c1, show_card c2
+        $"f'{!c1}{!c2}'"
+
+    open hu_holdem
+    let show_trace' (l : list (choice2 i8 action)) =
+        inl lines : ra u64 string = am.empty
+        inl cards : ra u64 string = am.empty
+        let add_card_if_not_empty () =
+            if 0 < length cards then
+                rm.add lines (rm.join' "" cards)
+                rm.clear cards
+        let rec loop is_first = function
+            | C1of2 x :: xs =>
+                rm.add cards (show_card x) . loop true xs
+            | C2of2 x :: xs => 
+                add_card_if_not_empty()
+                inl prefix = if is_first then "Player One" else "Player Two"
+                match x with
+                | Fold => $"f'{!prefix} folds.'"
+                | Call => $"f'{!prefix} calls.'"
+                | RaiseTo x => $"f'{!prefix} raises to {!x}.'"
+                |> rm.add lines
+                loop (not is_first) xs
+            | Nil => add_card_if_not_empty ()
+        loop true (listm.rev l)
+        lines
+    inl show_trace l = rm.join' "\n" (show_trace' l)
+    let show_terminal (p1,p2,(c,is_showdown) : {hand : i8 * i8; id : u8; pot : _} * {hand : i8 * i8; id : u8; pot : _} * _) reward (l : ra u64 string) =
+        inl prefix pid = if pid = 0u8 then "Player One" else "Player Two"
+        let hand pid h =
+            inl p = prefix pid
+            inl score = score' h c
+            inl s = show_score score.score
+            inl h = show_complete_hand score.hand
+            rm.add l $"f'{!p} shows {!s} {!h}'"
+        let reward pid =
+            inl p = prefix pid
+            inl r = !!reward pid
+            inl chips = abs r
+            if r < 0 then $"f'{!p} losses {!chips} chips.'"
+            elif r = 0 then $"f'{!p} ties.'"
+            else $"f'{!p} gains {!chips} chips.'"
+            |> rm.add l 
+        inl p1,p2 = if p1.id = 0 then p1,p2 else p2,p1
+        if is_showdown then
+            hand 0 p1.hand
+            hand 1 p2.hand
+        reward 0
+        reward 1
+        rm.join' "\n" l
+    
+    let rec loop game =
+        match train.vs_human game human_pid player_op with
+        | Terminal (player_state, (p1,p2,((community_card,n),stack,is_showdown)), reward) =>
+            inl trace = show_trace' (pl2_observations player_state human_pid) |> show_terminal (p1,p2,(community_card,is_showdown)) reward
+            inl actions = record {
+                call = $"False" : obj
+                fold = $"False" : obj
+                raise_to = $"False" : obj
+                raise_min = 0 : st
+                raise_max = 0 : st
+                }
+            inl r = !!reward human_pid |> round
+            inl p1,p2 = if human_pid = p1.id then p1,p2 else p2,p1
+            inl table_data = record {
+                my_stack = stack + r
+                my_pot = 0 : st
+                my_card = show_hand p1.hand
+                op_stack = stack - r
+                op_pot = 0 : st
+                op_card = show_hand p2.hand
+                community_card = ($"!community_card[:!n]" : a st _) |> am.generic.map show_card |> rm.join' ""
+                }
+            set (record {trace actions table_data})
+        | Action (player_state, (p1,p2,((community_card,n),_)), pid, (hu_actions {is_fold is_raise raise_min raise_max} : actions), next) =>
+            inl trace = show_trace (pl2_observations player_state human_pid)
+            inl actions = 
+                record {
+                    raise_min raise_max
+                    fold = if is_fold then fun () => next (log_prob_one(),Fold) |> loop else $"False"
+                    call = fun () => next (log_prob_one(),Call) |> loop
+                    raise_to = if is_raise then fun v => next (log_prob_one(),RaiseTo v) |> loop else $"False"
+                    }
+            inl p1,p2 = if human_pid = p1.id then p1,p2 else p2,p1
+            inl table_data = record {
+                my_stack = stack - p1.pot
+                my_pot = p1.pot
+                my_card = show_hand p1.hand
+                op_stack = stack - p2.pot
+                op_pot = p2.pot
+                op_card = show_hand p2.hand
+                community_card = ($"!community_card[:!n]" : a st _) |> am.generic.map show_card |> rm.join' ""
+                }
+            set (record {trace actions table_data})
+    loop (game (game_mode,sb,bb,stack) pl2_init)
+
+inl main () =
+    open hu_holdem
+    // `exp`ected and `cat`egorical
+    inl vs_self x = namedtuple "VsSelf" {exp=train.vs_self (game x); cat=train_cat.vs_self (game x)}
+    inl vs_one x = namedtuple "VsOne" {exp=train.vs_one (game x); cat=train_cat.vs_one (game x)}
+    inl uniform_selector (hu_actions {is_fold is_raise raise_min raise_max} : actions) : a st action =
+        inl x : ra st _ = am.empty
+        if is_fold then rm.add x Fold
+        rm.add x Call
+        if is_raise then loopw.for' {from=raise_min; nearTo=raise_max} (fun i => rm.add x (RaiseTo i))
+        $"numpy.array(!x,copy=False)"
+    inl uniform : ra u64 (pl2 i8 action * ({hand : i8 * i8; id : u8; pot : i16} * {hand : i8 * i8; id : u8; pot : i16} * (a st i8 * st) * i16 * bool) * pid * actions) -> a u64 (log_prob * action) * _ = agent.uniform.policy uniform_selector
+    inl aggrodonk_selector (hu_actions {is_fold is_raise raise_min raise_max} : actions) : a st action =
+        inl x : ra st _ = am.empty
+        rm.add x Call
+        if is_raise then 
+            // Sampling in log space ensures that smaller bets get better coverage.
+            inl log_min, log_max = log (conv_num raise_min), log (conv_num raise_max)
+            inl d = log_max - log_min
+            rm.add x (RaiseTo (round (exp (($"numpy.random.rand()" : f32) * d + log_min))))
+        $"numpy.array(!x,copy=False)"
+    inl aggrodonk : ra u64 (pl2 i8 action * ({hand : i8 * i8; id : u8; pot : i16} * {hand : i8 * i8; id : u8; pot : i16} * (a st i8 * st) * i16 * bool) * pid * actions) -> a u64 (log_prob * action) * _ = agent.uniform.policy aggrodonk_selector
+    inl callbot : ra u64 (pl2 i8 action * ({hand : i8 * i8; id : u8; pot : i16} * {hand : i8 * i8; id : u8; pot : i16} * (a st i8 * st) * i16 * bool) * pid * actions) -> a u64 (log_prob * action) * _ = agent.holdem_callbot.policy
+    inl num_actions = 16 // Should be at least 2.
+    inl neural_selector (hu_actions {is_fold is_raise call raise_min raise_max} : actions) : a st action =
+        inl h : dict st () = dictm.empty
+        inl x : ra st _ = am.empty
+        if is_fold then rm.add x Fold
+        rm.add x Call
+        if is_raise then
+            inl raises_left = num_actions - length x
+            inl num_raises = 1 + raise_max - raise_min
+            if num_raises <= raises_left then
+                loopw.for' {from=raise_min; nearTo=1 + raise_max} (fun v => rm.add x (RaiseTo v))
+            else
+                inl add v = if length x < num_actions && raise_min <= v && v <= raise_max && dictm.tryAdd h v () then rm.add x (RaiseTo v)
+                add raise_min . add raise_max
+                inl _ = // Add pot sized bets
+                    inl pot = 2 * call
+                    inl add x = add (call + x)
+                    add (pot/4) . add (pot/2) . add (pot*3/4) . add pot
+                    // add (pot*5/4) . add (pot*3/2) . add (pot*7/4) . add (pot*2)
+                    // add (pot*9/4) . add (pot*5/2) . add (pot*11/4) . add (pot*3)
+                
+                inl fin (scale : f32 -> st) = loopw.while (fun _ => length x < num_actions) (fun _ => add (scale $"numpy.random.rand()"))
+                if num_raises * 3 <= raises_left then
+                    // Sampling in linear space gives an uniform distribution over the bets.
+                    inl min, max = conv_num raise_min, conv_num raise_max
+                    inl d = max - min
+                    fin (fun r => round (r * d + min))
+                else
+                    // Sampling in log space ensures that smaller bets get better coverage.
+                    inl log_min, log_max = log (conv_num raise_min), log (conv_num raise_max)
+                    inl d = log_max - log_min
+                    fin (fun r => round (exp (r * d + log_min)))
+
+        $"numpy.array(!x,copy=False)"
+    inl neural = train.neural agent.neural_holdem.extractor agent.neural_holdem.schema() (num_actions, neural_selector)
+    record {ui train = record {vs_self vs_one neural player=namedtuple "StaticPlayers" {callbot aggrodonk uniform}}}

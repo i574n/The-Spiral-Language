@@ -1,0 +1,101 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <LangVersion>preview</LangVersion>
+    <RollForward>Major</RollForward>
+    <TargetLatestRuntimePatch>true</TargetLatestRuntimePatch>
+    <RootNamespace>The_Spiral_Language_2</RootNamespace>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>Spiral</AssemblyName>
+    <ServerGarbageCollection>true</ServerGarbageCollection>
+    <ConcurrentGarbageCollection>true</ConcurrentGarbageCollection>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|AnyCPU'">
+    <PlatformTarget>x64</PlatformTarget>
+    <Tailcalls>True</Tailcalls>
+    <WarningLevel>3</WarningLevel>
+    <Optimize>False</Optimize>
+    <DefineConstants>TRACE</DefineConstants>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|AnyCPU'">
+    <PlatformTarget>x64</PlatformTarget>
+    <Optimize>True</Optimize>
+    <Tailcalls>True</Tailcalls>
+  </PropertyGroup>
+  <PropertyGroup>
+    <NoWarn>3370</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../../../deps/spiral/lib/spiral/common.fsx" />
+    <Compile Include="../../../deps/spiral/lib/spiral/sm.fsx" />
+    <Compile Include="../../../deps/spiral/lib/spiral/crypto.fsx" />
+    <Compile Include="../../../deps/spiral/lib/spiral/date_time.fsx" />
+    <Compile Include="../../../deps/spiral/lib/spiral/async_.fsx" />
+    <Compile Include="../../../deps/spiral/lib/spiral/threading.fsx" />
+    <Compile Include="../../../deps/spiral/lib/spiral/networking.fsx" />
+    <Compile Include="../../../deps/spiral/lib/spiral/platform.fsx" />
+    <Compile Include="../../../deps/spiral/lib/spiral/runtime.fsx" />
+    <Compile Include="../../../deps/spiral/lib/spiral/file_system.fsx" />
+    <Compile Include="../../../deps/spiral/lib/spiral/trace.fsx" />
+    <Compile Include="../../../deps/spiral/lib/spiral/lib.fsx" />
+    <Compile Include="../../../lib/fsharp/Common.fs" />
+    <Compile Include="../../../lib/fsharp/CommonFSharp.fs" />
+    <Compile Include="../../../lib/fsharp/Async.fs" />
+    <Compile Include="../../../lib/fsharp/AsyncSeq.fs" />
+    <Compile Include="../../../lib/fsharp/Runtime.fs" />
+    <Compile Include="../../../lib/fsharp/FileSystem.fs" />
+    <Compile Include="../../../deps/spiral/apps/compiler/spiral_compiler.fs" />
+    <Compile Include="../../../apps/spiral/Supervisor.fs" />
+    <Compile Include="../../../apps/spiral/Eval.fs" />
+
+    <None Include="Script1.fsx" />
+    <None Include="Script2.fsx" />
+    <Compile Include="PersistentVectorExtensions.fs" />
+    <Compile Include="HopacExtensions.fs" />
+    <Compile Include="HashConsing.fs" />
+    <Compile Include="Startup.fs" />
+    <Compile Include="Utils.fs" />
+    <Compile Include="ParserCombinators.fs" />
+    <Compile Include="LineParsers.fs" />
+    <Compile Include="VSCTypes.fs" />
+    <Compile Include="Tokenize.fs" />
+    <Compile Include="BlockSplitting.fs" />
+    <Compile Include="BlockParsing.fs" />
+    <Compile Include="BlockBundling.fs" />
+    <Compile Include="Infer.fs" />
+    <Compile Include="Prepass.fs" />
+    <Compile Include="PartEval.fs" />
+    <Compile Include="CodegenUtils.fs" />
+    <Compile Include="CodegenFsharp.fs" />
+    <Compile Include="RefCounting.fs" />
+    <Compile Include="CodegenC.fs" />
+    <None Include="corelib.cuh">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <Compile Include="CodegenCpp.fs" />
+    <None Include="corelib.py">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <Compile Include="CodegenPython.fs" />
+    <Compile Include="WDiff.fs" />
+    <Compile Include="WDiffPrepass.fs" />
+    <Compile Include="SpiProj.fs" />
+    <Compile Include="Graph.fs" />
+    <Compile Include="ServerUtils.fs" />
+    <Compile Include="Supervisor.fs" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Argu" Version="6.2.5" />
+    <PackageReference Include="FParsec" Version="2.0.0-beta2" />
+    <PackageReference Include="FSharp.Json" Version="0.4.1" />
+    <PackageReference Include="FSharpx.Collections" Version="3.1.0" />
+    <PackageReference Include="Hopac" Version="0.5.1" />
+
+    <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" Version="9.0.0-preview.1.24081.5" />
+    <PackageReference Include="System.Management" Version="9.0.0-preview.1.24080.9" />
+
+    <PackageReference Include="FSharp.Control.AsyncSeq" Version="3.2.1" />
+    <PackageReference Include="System.Reactive.Linq" Version="6.0.1-preview.1" />
+  </ItemGroup>
+</Project>

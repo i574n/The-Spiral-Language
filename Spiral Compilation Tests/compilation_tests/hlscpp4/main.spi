@@ -1,0 +1,15 @@
+// Folds and reductions.
+
+open corehls
+
+inl main () =
+    global "#include <iostream>"
+    open sam
+
+    // Updated the parser! Now 0 parses at the type level as an i32.
+    inl ar : sa 5 i32 = init (fun x => x+1)
+    
+    $"// start reduce"
+    inl x = ar |> reduce (+)
+    $"std::cout << !x << std::endl"
+    0i32

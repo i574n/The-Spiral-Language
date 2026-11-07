@@ -1,0 +1,19 @@
+packages: |core-
+modules: 
+    rx/
+        types-
+        disposablem
+        subjectm
+        main-
+    kivy/
+        types-
+        helpers
+        appm
+        buttonm
+        labelm
+        boxlayoutm
+    lithe/
+        main-
+    rx_test
+    kivy_test
+    lithe_test
