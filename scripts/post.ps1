@@ -14,6 +14,10 @@ function Find-Repo([string] $name) {
 $spiral = Find-Repo 'spiral'
 $blog = Find-Repo 'blog'
 if (-not $spiral -or -not $blog) { throw 'post.ps1 / spiral or blog not found beside or above this checkout: run scripts/init.ps1' }
+. (Join-Path $spiral 'scripts/core.ps1')
+. (Join-Path $spiral 'lib/spiral/lib.ps1')
+$repository = if ($env:GITHUB_REPOSITORY) { $env:GITHUB_REPOSITORY } else { 'i574n/The-Spiral-Language' }
+$owner, $repo = $repository -split '/'
 $posts = if ($Post.Count) { $Post } else { @(Get-ChildItem (Join-Path $root 'posts') -Directory | Where-Object { Test-Path (Join-Path $_.FullName "$($_.Name).spi") } | ForEach-Object Name) }
 if ($IsWindows) { $env:PATH = "$HOME\scoop\apps\erlang\current\bin;$HOME\scoop\apps\elixir\current\bin;$env:PATH" }
 foreach ($name in $posts) {
@@ -21,8 +25,12 @@ foreach ($name in $posts) {
     $overlay = Join-Path $root "target/post/$name/blog"
     if (Test-Path $overlay) { Remove-Item -LiteralPath $overlay -Recurse -Force }
     New-Item -ItemType Directory -Force $overlay | Out-Null
-    foreach ($part in 'engine', 'posts', 'app') { $from = Join-Path $blog $part; if (Test-Path $from) { Copy-Item $from (Join-Path $overlay $part) -Recurse } }
+    foreach ($part in 'engine', 'posts', 'app', 'generator') { $from = Join-Path $blog $part; if (Test-Path $from) { Copy-Item $from (Join-Path $overlay $part) -Recurse } }
     Copy-Item (Join-Path $source "$name.spi") $overlay
+    $generate = Join-Path $overlay 'app/generate.spi'
+    $sitePath = "/$repo/posts/$name/article/"
+    $siteUrl = "https://$owner.github.io/$repo/posts/$name/article"
+    [IO.File]::WriteAllText($generate, "///- --package ..`n:< sm'_operators`n:< engine`n`n:= main () : i32 =`n    [ $name.entry () ] |> site.files_at `"$sitePath`" `"$siteUrl`" |> build.write_files `"dist`"`n    0i32`n")
     $project = [IO.File]::ReadAllText((Join-Path $blog 'package.spiproj')).Replace("`r`n", "`n")
     $libAnchor = 'packageDir: ../spiral/lib'
     $postsAnchor = "`n    posts/`n"
@@ -43,5 +51,17 @@ foreach ($name in $posts) {
         Pop-Location
         Remove-Item Env:MIX_BUILD_PATH, Env:SPIRAL_CELLS_MEMO, Env:SPIRAL_CELLS_WARM, Env:SPIRAL_LIB -ErrorAction Ignore
     }
-    "post $name compiles against blog's engine and its tests pass; page: posts/$name/$name.spi.html"
+    if (!(BuildSpiral $generate (Join-Path $overlay 'app/generate.rs') "fork/post/$name")) { throw "post.ps1 / $name blog generator compile failed" }
+    $env:CARGO_TARGET_DIR = Join-Path $overlay 'cargo'
+    $manifest = Join-Path $overlay 'generator/Cargo.toml'
+    cargo build --release --manifest-path $manifest
+    if ($LASTEXITCODE -ne 0) { throw "post.ps1 / $name blog generator build exit $LASTEXITCODE" }
+    Push-Location $overlay
+    try {
+        & (Join-Path $env:CARGO_TARGET_DIR "release/blog-generate$(if ($IsWindows) { '.exe' })")
+        if ($LASTEXITCODE -ne 0) { throw "post.ps1 / $name blog generator exit $LASTEXITCODE" }
+    } finally { Pop-Location }
+    $pages = @(Get-ChildItem (Join-Path $overlay 'dist') -Recurse -File).Count
+    if ($pages -eq 0) { throw "post.ps1 / $name blog generator wrote no files" }
+    "post $name compiles against blog's engine and its tests pass; notebook: posts/$name/$name.spi.html; article: posts/$name/article/ ($pages files)"
 }
