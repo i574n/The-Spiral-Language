@@ -1,0 +1,22 @@
+diff --git a/The Spiral Language 2/BlockParsing.fs b/The Spiral Language 2/BlockParsing.fs
+index 20bd008..2eb5071 100644
+--- a/The Spiral Language 2/BlockParsing.fs	
++++ b/The Spiral Language 2/BlockParsing.fs	
+@@ -1141,7 +1141,16 @@ and root_type (flags : RootTypeFlags) d =
+ 
+     let fold_applies a b = List.fold (fun a b -> RawTApply(range_of_texpr a +. range_of_texpr b,a,b)) a b
+     let apply_tight d = pipe2 cases (many (expr_tight cases)) fold_applies d
+-    let apply d = pipe2 apply_tight (many (indent (col d) (<) apply_tight)) fold_applies d
++    let apply (d : Env) =
++        let line_start_column =
++            let i = min d.Index (d.tokens.Length - 1)
++            if i < 0 then col d
++            else
++                let row = (fst (fst d.tokens.[i])).line
++                let mutable first = i
++                while first > 0 && (fst (fst d.tokens.[first - 1])).line = row do first <- first - 1
++                min (col d) (fst (fst d.tokens.[first])).character
++        pipe2 apply_tight (many (indent line_start_column (<) apply_tight)) fold_applies d
+     
+     let pairs = sepBy1 apply (skip_op "*") |>> List.reduceBack (fun a b -> RawTPair(range_of_texpr a +. range_of_texpr b,a,b))
+     let functions = sepBy1 pairs (skip_op "->") |>> List.reduceBack (fun a b -> RawTFun(range_of_texpr a +. range_of_texpr b,a,b,FT_Vanilla))

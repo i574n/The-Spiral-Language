@@ -1,0 +1,19 @@
+packages: |core-
+modules: 
+    serialization/
+        dense/
+            array
+        sparse/
+            int
+    utils/
+        main-
+        torch
+    serialization_dense_array_test
+    serialization_sparse_int_test
+    sampling
+    nodes
+    dudo
+    leduc
+    random_agent
+    main
+

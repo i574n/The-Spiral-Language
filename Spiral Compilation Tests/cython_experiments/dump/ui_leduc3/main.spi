@@ -1,0 +1,52 @@
+open kivy
+open lithe
+
+union msg =
+    | Action: string * array leduc.action * (leduc.action -> ())
+    | StartGame
+
+type player = { pot : i32; stack : i32; card : string }
+type state = {
+    me : player
+    opp : player
+    community_card : option string
+    actions : array leduc.action
+    cont : leduc.action -> ()
+    trace : string
+    }
+
+inl init_state () : state = {
+    me = {pot=0; stack=0; card=" "}
+    opp = {pot=0; stack=0; card=" "}
+    community_card = Some: "J"
+    actions = ;[]
+    cont = fun _ => ()
+    trace = ""
+    }
+
+inl model (s : state) = function
+    | StartGame => s
+
+inl view dispatch (state : rx.observable state) =
+    inl (~+) x = +state x
+    floatlayout [
+        @on_pos (fun _,x => dispatch (UpdateTablePos: x))
+        @on_size (fun _,x => dispatch (UpdateTableSize: x))
+        children [
+            label [
+                +pos (fun {table={cords={x width y height}}} => x + width * 0.075, y + height * 0.075)
+                +text (fun {table={myPot={chips}}} => a64.join' "" ;["Stack: "; $"str(!chips)"])
+                -size_hint (None, None)
+                -font_size 30
+                +size (fun {table={myStack={texture_size}}} => texture_size)
+                @on_texture_size (fun _,x => dispatch (UpdateMyStackTextureSize: x))
+                ]
+            ]
+        ]
+
+inl main () =
+    inl app = appm.create()
+    // inl p1 = agent.neural_random.create()
+    // inl p2 = agent.uniform_random.create()
+    inl _ = rx.subscribe (loop init_state() model view) (appm.root app)
+    appm.run app

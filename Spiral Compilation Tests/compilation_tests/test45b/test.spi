@@ -1,0 +1,4 @@
+// Does the array of arrays get cleared correctly in the C backend?
+inl main () =
+    inl field : a u64 (a u64 i32) = create 4
+    0i32

@@ -1,0 +1,6 @@
+*.nnreg
+*.nnavg
+.fake
+.ionide
+*.pyd
+*.ncu-rep

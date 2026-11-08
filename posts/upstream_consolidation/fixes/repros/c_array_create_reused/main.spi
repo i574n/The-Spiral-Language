@@ -1,0 +1,8 @@
+let sum_of_sevens (n : i32) : i32 =
+    inl first : a i32 i32 = am.init n (fun _ => 7i32)
+    am.fold (+) 0i32 first
+
+inl main () : i32 =
+    inl total = sum_of_sevens 16i32
+    inl second : a i32 i32 = create 16i32
+    if total = 112i32 then index second 0i32 else 99i32

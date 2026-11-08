@@ -1,0 +1,15 @@
+// Is the heap object ref counted correctly?
+
+inl main () =
+    inl ~a = true
+    inl b = heap true
+    inl q =
+        if a then
+            join 
+                inl _ = ()
+                join 
+                    inl _ = ()
+                    join  b, b
+        else
+            b, b
+    0i32

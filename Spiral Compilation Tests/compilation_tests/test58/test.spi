@@ -1,0 +1,4 @@
+// Do unapplied metavars errors happen on module application? They should.
+inl main () = 
+    inl x = a32.fold
+    ()

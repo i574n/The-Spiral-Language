@@ -1,0 +1,53 @@
+type obj = $"object"
+nominal tensor = obj
+nominal net = obj
+nominal distribution = obj
+inl randn forall t {int}. (b,a : t * t) = tensor $"torch.randn(!b,!a)"
+inl forward l (x : tensor) = tensor $"!l.forward(!x)"
+inl fromArray (x : array _) : tensor = $"torch.from_numpy(!x)"
+inl categorical (probs : tensor) : distribution = $"torch.distributions.Categorical(probs=!probs)"
+inl sample (x : distribution) : tensor = $"!x.sample()"
+
+inl denseSize x = serialization.dense.array.size x
+inl sparseSize x = serialization.sparse.int.size x
+
+inl serializeDense schema x = 
+    open serialization.dense.array
+    inl (binary_array x) = serialize schema x
+    fromArray x
+
+inl serializeSparse schema x =
+    open serialization.sparse.int
+    serialize schema x
+
+inl deserializeSparse schema (x : tensor) =
+    open serialization.sparse.int
+    deserialize schema (phash $"!x.item()")
+
+inl deserializeMaskedSparse schema mask (x : tensor) =
+    open serialization.sparse.int
+    deserialize schema (a64.index mask $"!x.item()")
+
+type serialized_net o a = {
+    net : net
+    input : serialization.dense.array.pu o
+    output : serialization.sparse.int.pu a
+    }
+
+inl runMasked ({net input output} : serialized_net _ _) observation mask = 
+    inl o = forward net (serializeDense input observation)
+    inl mask = a64.map (serializeSparse output) mask
+    inl o_mask = $"!o[!mask]" : tensor
+    inl o_mask_dist = $"torch.nn.functional.softmax(!o_mask,-1)" |> categorical
+    deserializeMaskedSparse output mask (sample o_mask_dist)
+
+inl run ({net input output} : serialized_net _ _) observation =
+    inl o = forward net (serializeDense input observation)
+    inl o_dist = $"torch.nn.functional.softmax(!o,-1)" |> categorical
+    deserializeSparse output (sample o_dist)
+
+inl PyTorchImports =
+    !!!!Import("torch")
+    !!!!Import("torch.nn")
+    !!!!Import("torch.distributions")
+    !!!!Import("torch.nn.functional")

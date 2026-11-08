@@ -1,0 +1,108 @@
+nominal pu t = {
+    pickle : t -> mut i32 * a i32 u8 -> ()
+    size : t -> i32
+    unpickle : mut i32 * a i32 u8 -> t
+    }
+
+inl unit() =
+    pu {size = fun _ => 0
+        pickle = fun () _ => ()
+        unpickle = fun _ => ()
+        }
+
+inl symbol forall t {symbol}. : pu t =
+    pu {size = fun _ => 0
+        pickle = fun _ _ => ()
+        unpickle = fun _ => !!!!TypeToSymbol(`t)
+        }
+
+inl primitive length read =
+    pu {size = fun _ => length
+        pickle = fun x (i',s) =>
+            inl i = *i'
+            inl s = span.create' s {i length}
+            assert $"System.BitConverter.TryWriteBytes(!s,!x)" "Conversion failed."
+            i' <- i+length
+        unpickle = fun (i',s) =>
+            inl i = *i'
+            i' <- i+length
+            read s i
+        }
+
+inl i32Size forall t{number}. : t = 4 // $"sizeof<int>"
+inl i32() : pu i32 = primitive i32Size (fun s i => $"System.BitConverter.ToInt32(!s,!i)")
+
+inl charSize forall t{number}. : t = 2 // $"sizeof<char>"
+inl char() : pu char = primitive charSize (fun s i => $"System.BitConverter.ToChar(!s,!i)")
+
+inl array' (pu prim) : pu (a _ _) =
+    inl (pu i32) = i32()
+    pu {
+        size = fun x => am.fold (fun s x => s + prim.size x) i32Size x
+        pickle = fun x state =>
+            i32.pickle (length x) state
+            am.iter (fun x => prim.pickle x state) x
+        unpickle = fun state =>
+            inl length = i32.unpickle state
+            am.init length (fun _ => prim.unpickle state)
+        }
+
+inl string() =
+    inl (pu p) = array' char()
+    pu {size = fun x => i32Size + charSize * sm.length x
+        pickle = fun x state => p.pickle $"!x.ToCharArray()" state
+        unpickle = fun state => inl ar = p.unpickle state in $"System.String(!ar)"
+        }
+
+inl pair (pu a') (pu b') =
+    pu {size = fun (a,b) => a'.size a + b'.size b
+        pickle = fun (a,b) state => a'.pickle a state . b'.pickle b state
+        unpickle = fun state => a'.unpickle state, b'.unpickle state
+        }
+
+inl wrap (b,a) (pu p) =
+    pu {size = a >> p.size
+        pickle = fun x state => p.pickle (a x) state
+        unpickle = fun state => b (p.unpickle state)
+        }
+
+inl record_qwe p = wrap ((fun (q,w,e) => {q w e}),(fun {q w e} => q,w,e)) p
+
+// Like wrap, except for recursive types.
+// Trying to run wrap' without passing it to alt risks stack overflowing the compiler.
+inl wrap' (b,a) p =
+    pu {size = fun x => inl (pu p) = p() in p.size(a x)
+        pickle = fun x state => inl (pu p) = p() in p.pickle (a x) state
+        unpickle = fun state => inl (pu p) = p() in b (p.unpickle state)
+        }
+
+inl alt forall t. (tag : t -> i32) (l : list (pu t)) : pu t =
+    inl rec static_index (i : i32) = function
+        | Nil => error_type "Invalid tag."
+        | Cons (l, ls) => if i = 0 then l else static_index (i-1) ls
+    inl pu_of (x : t) =
+        inl i = tag x
+        if var_is i then error_type "Tag must be static here."
+        i, static_index i l
+        
+    // If x is already unboxed in scope, trying to unbox it again will be substituted with that.
+    inl unbox_tag forall r. (x : t) (on_succ : i32 * pu t -> r) : r = !!!!Unbox(x,fun _ => on_succ (pu_of x))
+    inl (pu i32) = i32()
+    pu {size = fun ~x => join unbox_tag x (fun (_, pu p) => i32Size + p.size x)
+        pickle = fun ~x state => join unbox_tag x (fun (i, pu p) => i32.pickle i state . p.pickle x state)
+        unpickle = fun state => join
+            inl tag = i32.unpickle state
+            inl rec loop i = function
+                | Cons (pu p, ls) => if i = tag then p.unpickle state else loop (i+1) ls
+                | Nil => failwith "Invalid tag."
+            loop 0 l
+        }
+
+
+inl rec list p =
+    alt (function Cons _ => 0 | Nil => 1) (
+        wrap' (Cons,fun (Cons (a,b)) => a,b) (fun () => pair p (list p)) :: 
+        wrap ((fun _ => Nil),fun (Nil) => ()) unit() :: 
+        Nil
+        )
+

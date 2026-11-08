@@ -1,0 +1,22 @@
+diff --git a/The Spiral Language 2/CodegenC.fs b/The Spiral Language 2/CodegenC.fs
+index 6f96a40..f967fba 100644
+--- a/The Spiral Language 2/CodegenC.fs	
++++ b/The Spiral Language 2/CodegenC.fs	
+@@ -172,7 +172,7 @@ let codegen (env : PartEvalResult) (x : TypedBind []) =
+         fun () -> let x = i in i <- i + 1u; x
+ 
+     let global' =
+-        let has_added = HashSet()
++        let has_added = HashSet env.globals
+         fun x -> if has_added.Add(x) then globals.Add x
+ 
+     let import x = global' $"#include <{x}>"
+@@ -887,7 +887,7 @@ let codegen (env : PartEvalResult) (x : TypedBind []) =
+ 
+         let program = StringBuilder()
+ 
+-        globals |> Seq.iter (fun x -> program.AppendLine(x) |> ignore)
++        Seq.append env.globals globals |> Seq.iter (fun x -> program.AppendLine(x) |> ignore)
+         fwd_dcls |> Seq.iter (fun x -> program.Append(x) |> ignore)
+         types |> Seq.iter (fun x -> program.Append(x) |> ignore)
+         functions |> Seq.iter (fun x -> program.Append(x) |> ignore)

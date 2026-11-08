@@ -1,0 +1,5 @@
+// Do && and || work correctly?
+inl main () =
+    inl a,b,c,d,e = dyn (true, false, true, false, true)
+    inl ~_ = a && b || c && d || e
+    0i32

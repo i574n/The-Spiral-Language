@@ -1,0 +1,51 @@
+///- --package .
+open sm'_operators
+open engine
+
+test c_self_tail_loop static =
+    open testing
+
+inl entry () : page.entry =
+    {
+        slug = "c-self-tail-loop"
+        title = "C Self Tail Loops"
+        date = "2026-10-27"
+        kind = page.Article
+        authors = [{ name = "i574n"; handle = "i574n" }]
+        blurb = "A let rec function that calls itself in tail position now compiles to a loop in the C backend, so deep self recursion no longer overflows the stack."
+        blocks =
+            [
+                post.Paragraph "The second post in the series. The first one ended with a bug that already reproduces on host_cpp_and_cuda_backend: a let rec function whose last step calls itself compiles to a recursive C function. At -O0 gcc does no tail-call elimination, so a loop of a million steps written that way overflows the stack."
+                post.Heading "The bug"
+                post.Paragraph "The repro walks a four-element array a million times, threading a record and an accumulator through a let rec loop. Upstream's C for it is a function that calls itself once per step, and at -O0 the program dies with exit -1073741571 (0xC00000FD, a stack overflow)."
+                post.Heading "The fix"
+                post.Paragraph "CodegenC now checks, before it prints a method, whether some path through the body ends in a call to that same method: directly, in a branch of an if, a union match or an int switch, or through a let whose bound result is returned unchanged. Such a method is printed as a while (1) loop, and the paths that don't call it still return. A self call becomes an assignment of the new arguments, through temporaries so that every argument is computed from the old values, followed by continue. Every other method prints as before."
+                post.Table (
+                    ["Sample"; "Before"; "After"],
+                    [
+                        ["c_self_tail_loop_heap at -O0"; "exit -1073741571 (stack overflow)"; "exit 24"]
+                    ])
+                post.Heading "The port"
+                post.Paragraph "The fix was written on the fork, whose codegen has moved on, so it was cut from the fork's history and ported by hand. Two of the eight hunks in that cut turned out to be other features, a refcount elision for stack unions and an iterative decref for recursive heap unions. Both use types upstream does not have, so they were dropped from this post. The fork counts nested functions with fns_printing.Count; upstream has no fns_printing, so the port keeps an explicit depth counter instead. A hunk stays only if it names a self-tail term or a self-tail hunk uses something it defines."
+                post.Heading "Checked"
+                post.Paragraph "A compiler built from host_cpp_and_cuda_backend with post 1's patches and this one, against the oracle's expected exits:"
+                post.Table (
+                    ["Fix"; "Sample"; "Exit"; "Expected"],
+                    [
+                        ["C-SELF-TAIL-LOOP"; "c_self_tail_loop_heap"; "24"; "24"]
+                        ["C-ARRAY-CREATE-INIT"; "c_array_create_reused"; "0"; "0"]
+                        ["SPIRAL-MACRO-SPLICE-QUOTE"; "macro_splice_before_quote"; "17"; "17"]
+                        ["GADT-MATCH-FORALL-CONSTRAINT"; "gadt_match_loses_constraint"; "0"; "0"]
+                    ])
+                post.Rule
+                post.Heading "Next"
+                post.Paragraph "One of the dropped hunks is a change of its own: upstream frees a recursive heap union with a decref that calls itself once per node, and the fork's version walks the chain in a loop instead. A later post measures whether upstream's recursive decref overflows on a long list, and ports the loop if it does."
+            ]
+    }
+
+test the_post_is_a_page_of_the_site =
+    [entry ()] |> site.files |> site.paths |> sm'.contains "c-self-tail-loop/index.html" |> _assert_eq true
+
+test the_post_renders_its_tables =
+    inl html = page.render_entry (entry ())
+    (sm'.contains "<table" html, sm'.contains "C-SELF-TAIL-LOOP" html) |> _assert_eq (true, true)

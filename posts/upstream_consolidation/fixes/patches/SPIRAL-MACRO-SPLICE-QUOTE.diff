@@ -1,0 +1,37 @@
+diff --git a/The Spiral Language 2/Tokenize.fs b/The Spiral Language 2/Tokenize.fs
+index 75b9955..ae2208e 100644
+--- a/The Spiral Language 2/Tokenize.fs	
++++ b/The Spiral Language 2/Tokenize.fs	
+@@ -390,9 +390,17 @@ and macro s =
+             Ok(UnescapedChar(r, c))
+         | _ -> error_char s.from "\\"
+ 
+-    let p_var s = (many1Satisfy2L is_var_char_starting is_var_char "variable") s
++    let p_var closing_char s =
++        match (many1Satisfy2L is_var_char_starting is_var_char "variable") s with
++        | Ok (name : string) when is_var_char closing_char && name.Length > 1 && name.EndsWith (string closing_char) ->
++            let rest = s.text.Substring s.from
++            if rest.IndexOf closing_char >= 0 || rest.TrimEnd().EndsWith "\\" then Ok name
++            else
++                s.from <- s.from - 1
++                Ok (name.Substring (0, name.Length - 1))
++        | result -> result
+     let p_text closing_char s = (range (many1SatisfyL (fun c -> c <> closing_char && c <> '`' && c <> '!' && c <> '@' && c <> '#' && c <> '\\') "macro text") |>> Text) s
+-    let p_expr s = 
++    let p_expr closing_char s = 
+         let start = anyOf ['`'; '!'; '@'; '#']
+         let case_paren start_char = 
+             let mutable c = 1 // number of open parens.
+@@ -403,10 +411,10 @@ and macro s =
+             |>> fun (body) range -> Expression(range,body,char_to_macro_expr start_char)
+         let case_var start_char =
+             (skip_char start_char |>> fun () range -> UnescapedChar(range,start_char))
+-            <|> (p_var |>> fun body range -> Var(range,body,char_to_macro_expr start_char))
++            <|> (p_var closing_char |>> fun body range -> Var(range,body,char_to_macro_expr start_char))
+         (range (start >>= fun start_char -> (case_paren start_char <|> case_var start_char))
+         |>> fun (range, f) -> f range) s
+-    let p_macro_inner closing_char s = (many (p_special_char <|> p_text closing_char <|> p_expr) <|>% []) s
++    let p_macro_inner closing_char s = (many (p_special_char <|> p_text closing_char <|> p_expr closing_char) <|>% []) s
+     let p_macro s =
+         let body a b = range (between (skip_string a) (skip_char b) (p_macro_inner b))
+         (body "$\"" '"' <|> body "$'" ''') s

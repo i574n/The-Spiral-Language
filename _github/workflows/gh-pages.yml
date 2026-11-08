@@ -1,0 +1,63 @@
+name: gh-pages
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    timeout-minutes: 120
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - uses: moonrepo/setup-rust@v1.3.0
+        with:
+          channel: "nightly-2026-10-18"
+
+      - uses: erlef/setup-beam@v1.24.1
+        with:
+          otp-version: "29"
+          elixir-version: "1.20"
+          gleam-version: "1.19.2"
+          rebar3-version: "3.28.0"
+
+      - uses: mlugg/setup-zig@v2.2.1
+        with:
+          version: "0.17.0"
+
+      - run: pwsh scripts/workflow.ps1
+
+      - run: pwsh scripts/publish.ps1
+        if: ${{ !cancelled() }}
+
+      - uses: actions/upload-artifact@v7.0.2
+        if: ${{ !cancelled() }}
+        with:
+          name: gh-pages
+          path: dist
+          retention-days: 30
+
+  push:
+    needs: build
+    if: ${{ !cancelled() && github.event_name != 'pull_request' }}
+    timeout-minutes: 30
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - uses: actions/download-artifact@v8.0.2
+        with:
+          name: gh-pages
+          path: gh-pages
+
+      - uses: peaceiris/actions-gh-pages@v4.1.0
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: gh-pages
+          force_orphan: true

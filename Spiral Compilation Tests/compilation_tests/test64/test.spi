@@ -1,0 +1,8 @@
+// Is the type annotation getting propagated correctly into a record?
+
+inl nodes () = 
+    {
+    action=fun p1 => 
+        inl q = p1.observations
+        ()
+    } : { action : { observations : string} -> () }

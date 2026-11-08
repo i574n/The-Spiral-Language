@@ -1,0 +1,4 @@
+open listm
+inl main () =
+    inl ~x = 1 :: 2 :: 3 :: Nil : list i32
+    fold (+) 0i32 x : i32

@@ -1,0 +1,10 @@
+// Does the binary . operator apply if it is directly next to an expression?
+inl main () =
+    inl f = function
+        | .Hello as x => .Bye
+
+    inl g = function
+        | .Bye => "Bye"
+
+    inl ~_ = dyn (g f.Hello)
+    0i32

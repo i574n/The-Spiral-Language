@@ -1,0 +1,90 @@
+type state = u32 * a u32 f32
+nominal pu a = {
+    pickle : a -> state -> ()
+    size : u32
+    unpickle : state -> a * u32
+    }
+
+inl unit() =
+    pu {
+        size = 1
+        pickle = fun () (i,s) => set s i 1
+        unpickle = fun (i,s) => 
+            inl x = index s i
+            (), if x = 1 then 1 elif x = 0 then 0 else failwith "Unpickling failure. The unit type should always be either be active or inactive."
+        }
+
+inl u32 (size : u32) : pu u32 =
+    pu { size
+        pickle = fun x (i,s : state) =>
+            if 0 <= x && x < size then set s (i + x) 1
+            else failwith "Value out of bounds."
+        unpickle = fun (from,s : state) =>
+            inl ~(from,nearTo) = from, from+size
+            join
+                inl case,c =
+                    loop.for {from nearTo} (fun i (case,c) =>
+                        inl x = index s i
+                        if x = 0 then case,c
+                        elif x = 1 then i,c+1
+                        else failwith "Unpickling failure. The int type must either be active or inactive."
+                        ) (0,0)
+                if 1 < c then failwith "Unpickling failure. Too many active indices in the one-hot vector."
+                case - from, c
+        }
+
+inl pair (pu a') (pu b') =
+    pu {size = a'.size + b'.size
+        pickle = fun (a,b) (i,s) => a'.pickle a (i,s) . b'.pickle b (i + a'.size, s)
+        unpickle = fun (i,s) => 
+            inl x,c' = a'.unpickle (i,s)
+            inl x',c'' = b'.unpickle (i + a'.size, s)
+            inl c = c' + c''
+            if c = 1 then failwith "Unpickling failure. Two sides of a pair should either all be active or inactive."
+            (x,x'), c / 2
+        }
+
+inl wrap (b,a) (pu p) =
+    pu {size = p.size
+        pickle = fun x state => p.pickle (a x) state
+        unpickle = fun state => inl x,c = p.unpickle state in b x,c
+        }
+
+inl alt forall t r. (l : r) : pu t = 
+    inl _ = real // Typechecking.
+        open real_core
+        union_to_record `t forall r'. =>
+        assert (record_type_length `r' = record_type_length `r) "The number of keys in the record should be the same as in the union type."
+        record_type_iter (fun k => forall v. =>
+            record_type_try_find `r' k
+                (forall v'. => typecase v' * v with ~x * pu ~x => ())
+                (fun () => error_type "The record's keys must match those of the union.")
+            ) `r
+    inl offsets, size = real
+        open real_core
+        record_fold (fun {state=(m,s) key value} => inl (pu p) = value in {m with $key=s}, s + p.size) ({},0u32) l
+    inl pickle (m : t) (i,s : state) : () = real
+        open real_core
+        unbox m (fun (k,v) => inl (pu p) = l k in p.pickle v (i + offsets k,s))
+    inl unpickle (i,s : state) : t * u32 = real
+        open real_core
+        inl x = 
+            record_type_map (fun k => forall v. =>
+                inl (pu p) = l k 
+                inl x,c = p.unpickle (i + offsets k,s)
+                nominal_create `t (k,x), c
+                ) `r
+        inl case, c =
+            record_fold (fun {state key value} => 
+                match state with
+                | () => value
+                | (case,c) =>
+                    inl case', c' = value
+                    (if c' = 1u32 then case' else case), c + c'
+                ) () x
+        if 1u32 < c then failwith `(()) "Unpickling failure. Only a single case of an union type should be active at most."
+        case, c
+    pu {size pickle unpickle}
+    
+inl option forall t. (a : pu t) : pu (option t) = alt { Some = a; None = unit() }
+inl result forall t y. (a : pu t) (b : pu y) : pu (result t y) = alt { Ok = a; Error = b }

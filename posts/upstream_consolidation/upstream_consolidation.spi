@@ -1,0 +1,83 @@
+///- --package .
+open sm'_operators
+open engine
+
+test upstream_consolidation static =
+    open testing
+
+inl entry () : page.entry =
+    {
+        slug = "upstream-consolidation"
+        title = "Upstream Consolidation"
+        date = "2026-10-18"
+        kind = page.Article
+        authors = [{ name = "i574n"; handle = "i574n" }]
+        blurb = "Merging the C++ and CUDA host branch and the ML library's core into master, with the bugs we found fixed."
+        blocks =
+            [
+                post.Paragraph "This is the first of a series of small posts, one per pull request, about the fork of The Spiral Language. It starts from vanilla: everything here is work that already exists upstream but never reached master, plus fixes for bugs we found in that work. It adds no features of our own; those come in later posts."
+                post.Heading "The language: host_cpp_and_cuda_backend"
+                post.Paragraph "The branch carries 98 commits from 2025-02-01 to 2025-11-14 on top of master's merge base. These are the compiler source files (.fs) they touch most:"
+                post.Table (
+                    ["File"; "Commits"],
+                    [
+                        ["CodegenCpp.fs"; "36"]
+                        ["CodegenPython.fs"; "20"]
+                        ["CodegenUtils.fs"; "13"]
+                        ["CodegenCppCudaHost.fs"; "11"]
+                        ["Supervisor.fs"; "10"]
+                        ["PartEval.fs"; "9"]
+                        ["BlockParsing.fs"; "8"]
+                        ["Prepass.fs"; "6"]
+                    ])
+                post.Heading "The core: corebase becomes core"
+                post.Paragraph "The ML library's corebase is the newest core. Each module was judged on its own; where the old core did something better, it was kept."
+                post.Table (
+                    ["Module"; "From"; "Decision"; "Why"],
+                    [
+                        ["base"; "corebase"; "take, extend"; "order stays the old nominal over i32 (keep-old: corebase's three-case union materializes a runtime enum and a match where comp a b |> gt_is on strings used to be one comparison; x's view crate grew past the 1k gate on it), hashable returns u64, arrays become one-dimensional array t indexed by int; the sa, da, sa_list and da_list nominals switch only over Cpp and Python and need an arm per backend"]
+                        ["real_core"; "corebase"; "take, extend"; "adds sqr, divup, modup, existential and singleton predicates, nominal_recreate, union_type helpers; assert keeps the old core's runtime failwith, because corebase's native assert arms exist only for Python, C++ and CUDA (a compile error on every other backend) and C++ assert vanishes under NDEBUG; hash switches only over Fsharp, Python, Cpp and Cuda and needs an arm per backend; structural (<>) lowers primitives to NEQ (SPIRAL-CORE-NEQ)"]
+                        ["core"; "corebase"; "take"; "adds bitwise complement, heap_refs, stack_refs, to_fptr, to_closure, tlit, union_map and record_map; the ~* and ~! deref operators are kept from the old core (keep-old: the fork's edition 3 lowers unary *x to a call of ~*, while upstream's parser builds RawLayoutIndex directly, so upstream never calls them and keeping them costs nothing); the backend_switch_* helpers name only Cpp, Cuda and Python and are judged with the backend arms"]
+                        ["listm"; "corebase"; "take"; "superset of the old module (fold2, foldBack2, zip, map2, mapi, exists', forall') except toArray, which arraym.fromList replaces"]
+                        ["optionm"; "corebase"; "take"; "bind takes the function first (bind f x), map is point-free, adds iter"]
+                        ["monad"; "corebase"; "take"; "the option instance follows the new bind order through swap"]
+                        ["limit"; "both"; "same"; "byte-identical"]
+                        ["loop"; "corebase"; "take"; "covers the old loopw: the thunk while is now while' (plain while threads a state), and for, for', forDown, forDown' keep their shapes; it adds while', break, forBy, proj, div, rigid splits and the linear and checkerboard iteration helpers"]
+                        ["arraym"; "corebase"; "take"; "strict superset of the old am under a clearer name"]
+                        ["am"; "old"; "drop"; "replaced by arraym"]
+                        ["sm"; "old"; "keep"; "corebase has no string module; index, length and slice are the only string primitives core offers"]
+                        ["loopw"; "old"; "drop"; "replaced by loop, which has the same while, for and forDown family"]
+                        ["dictm, dictm_type, dictm_utils"; "old"; "drop"; "Python-only despite the generic look: its buckets are the old ra Python list (rm.add, rm.pop) and keys go through hash_cython; corebase's corecudahost dictm is its newer CUDA-host successor; a dictionary for every backend needs growable buckets over array t and a backend-neutral hash, which is new work, not a port"]
+                        ["rm"; "old"; "drop"; "Python list operations through the old ra nominal, which corebase removed; Python-only helpers belong in a Python package"]
+                        ["iam, iam_real"; "old"; "drop"; "the inverse array (one array per field of a record element); upstream's own newer core dropped it, no consumer uses it, and struct.spir's combinators cover the type-level part"]
+                        ["compile_time"; "corebase"; "take"; "compile-time hash maps and sets, untyped and typed"]
+                        ["struct, type_arith, dep_optionm"; "corebase"; "take"; "backend-neutral type-level combinators (infer_map and infer_fold over tuple and record types), type arithmetic, and the GADT option indexed by some or none"]
+                        ["sam, dam, sa_listm, da_listm, tuple_listm"; "corebase"; "move out for now"; "static and dynamic arrays whose types are C++ templates and Python classes (sam.py, the backend_switch type macros in base); C, Rust, Zig and the other backends have no representation yet, and no consumer uses them; they return to core once every backend has an arm"]
+                        ["tensorm, partitionm, serializerm, pickler, picklers"; "corebase"; "move out"; "ML domain, not a slim core; they belong with the ML library's packages"]
+                        ["default"; "corebase"; "drop"; "comment-only file describing plugin settings"]
+                        ["types"; "corebase"; "drop"; "every alias it holds (tensor, partition, partition_offsets, serializer, pu, tuple_list) names a module that moved out, so trimming left it empty; the shipped core has only compile_time/types"]
+                        ["array literal"; "corebase"; "take"; "the parser lowers ;[...] to the term array in scope; with corebase that is the array nominal's constructor, so a literal is an array t (corebase's tensor module even redefines array to make literals tensors); our lib used an identity array to keep literals raw, which the migration drops"]
+                    ])
+                post.Heading "Fixes"
+                post.Paragraph "A fix is listed only if its sample fails on a compiler built from host_cpp_and_cuda_backend and passes with the patch. Candidate fixes that did not reproduce there, or that turned out to depend on our own syntax, were dropped."
+                post.Table (
+                    ["Fix"; "Area"; "Bug"; "Before"; "After"],
+                    [
+                        ["C-ARRAY-CREATE-INIT"; "CodegenC"; "ArrayCreate zeroes only arrays of heap elements (init_at_zero = is_heap), so a read before write of a number array sees garbage"; "ArrayCreate0(16l, false) and a read before write (the emitted C)"; "ArrayCreate0(16l, true)"]
+                        ["SPIRAL-MACRO-SPLICE-QUOTE"; "Tokenize"; "a splice right before the closing quote of a single-quoted macro swallows the delimiter"; "his tokenizer swallowed the closing quote (main unparsed)"; "exit 17 as accepted"]
+                        ["GADT-MATCH-FORALL-CONSTRAINT"; "Infer"; "matching a GADT case inside inl rec links the outer constraint"; "a type error"; "exit 0 as accepted"]
+                        ["FOR-D-COMPILER-BUGS"; "BlockParsing"; "a match scrutinee continued on the next line breaks the offside rule (the match keyword column should be the scrutinee's offside line)"; "main unparsed (offside)"; "exit 0 as accepted"]
+                        ["FOR-D-COMPILER-BUGS"; "BlockParsing"; "a type application continued on the next line is dropped (root_type apply ignores the head's start column)"; "a type error"; "exit 0 as accepted"]
+                    ])
+                post.Rule
+                post.Heading "Next"
+                post.Paragraph "The next post turns let rec self tail calls in the C backend into loops. That bug already reproduces on this branch as a stack overflow at -O0."
+            ]
+    }
+
+test the_post_is_a_page_of_the_site =
+    Cons (entry (), Nil) |> site.files |> site.paths |> sm'.contains "upstream-consolidation/index.html" |> _assert_eq true
+
+test the_post_renders_its_tables =
+    inl html = page.render_entry (entry ())
+    (sm'.contains "<table" html, sm'.contains "C-ARRAY-CREATE-INIT" html) |> _assert_eq (true, true)

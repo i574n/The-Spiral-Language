@@ -1,0 +1,70 @@
+nominal random_device = $"std::random_device"
+nominal mt = $"std::mt19937"
+nominal uint_dist = $"std::uniform_int_distribution<`mt::result_type>"
+
+nominal rng = mt * uint_dist
+
+// Makes an inclusive distribtion with an (inclusive) [from,to] range.
+inl make_dist (from, to : i32 * i32) : rng =
+    inl dev = $"`random_device \v" : random_device
+    inl mt = $"`mt \v(!dev())" : mt
+    inl dist = $"`uint_dist \v(!from,!to)" : uint_dist
+    rng (mt,dist)
+
+inl get_int (rng (mt,dist)) : i32 = $"!dist(!mt)"
+
+let test_random() =
+    inl d = make_dist (0,100)
+    get_int d
+
+open corehls
+
+nominal lfsr dim = ap_uint dim
+
+inl random_128 forall dim. (lfsr rng : lfsr 128) : ap_uint dim * lfsr 128 =
+    open ap_uintm
+    inl out = $"0"
+    inl rng =
+        loop.for {from=0; nearTo=length out} (fun i rng =>
+            inl f, (^) = index rng, xor
+            inl newbit = (f 0 ^ f 1) ^ (f 2 ^ f 7)
+            set out i newbit
+            inl rng = shift_right rng 1
+            set rng 127 newbit
+            rng
+            ) rng
+    
+    out, lfsr rng
+
+// inl default() : lfsr 128 = 
+//     inl out = $"1"
+//     ap_uintm.set out 127 $"1"
+//     lfsr out
+
+inl default() : lfsr 128 = // 285321827306898791209647125482703629360
+    open ap_uintm
+    inl a : ap_uint 128 = $"0b1101011010100110111111000010111101111111100001011011100001111110"
+    inl b : ap_uint 128 = $"0b1000001110011100000101101011010000000100101010110010110000110000"
+    lfsr (or (shift_left a 64) b)
+
+type n = 10
+type n2 = 1024
+inl main () =
+    global "#include <iostream>"
+    global "#include <bitset>"
+    open sam
+    inl hist : sa n2 i32 = init (fun _ => 0)
+
+    inl rng =
+        loop.for {from=0i32; nearTo=1_000_000} (fun i rng =>
+            inl r, rng : ap_uint 10 * _ = random_128 rng
+            inl i = $"(int) !r"
+            set hist i (index hist i + 1)
+            rng
+            ) default()
+    
+    iter (fun r => $"std::cout << !r << std::endl") hist
+    inl sum = fold (+) 0 hist
+    $'std::cout << "The sum is: " << !sum << std::endl'
+    $'std::cout << "The rng is: " << !rng << std::endl'
+    0i32
