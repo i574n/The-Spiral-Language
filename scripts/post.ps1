@@ -31,12 +31,12 @@ foreach ($name in $posts) {
     $sitePath = "/$repo/posts/$name/article/"
     $siteUrl = "https://$owner.github.io/$repo/posts/$name/article"
     [IO.File]::WriteAllText($generate, "///- --package ..`n:< sm'_operators`n:< engine`n`n:= main () : i32 =`n    [ $name.entry () ] |> site.files_at `"$sitePath`" `"$siteUrl`" |> build.write_files `"dist`"`n    0i32`n")
-    $project = [IO.File]::ReadAllText((Join-Path $blog 'package.spiproj')).Replace("`r`n", "`n")
-    $libAnchor = 'packageDir: ../spiral/lib'
-    $postsAnchor = "`n    posts/`n"
-    if (-not $project.Contains($libAnchor) -or ([regex]::Matches($project, [regex]::Escape($postsAnchor))).Count -ne 1) { throw 'post.ps1 / the blog package.spiproj changed: update the anchors' }
-    $project = $project.Replace($libAnchor, "packageDir: $((Join-Path $spiral 'lib').Replace('\', '/'))").Replace($postsAnchor, "`n    $name$postsAnchor")
-    [IO.File]::WriteAllText((Join-Path $overlay 'package.spiproj'), $project)
+    $project = [IO.File]::ReadAllText((Join-Path $blog 'spiral.toml')).Replace("`r`n", "`n")
+    $libAnchor = "packageDir = '../spiral/lib'"
+    $postsAnchor = "`nposts/`n"
+    if (-not $project.Contains($libAnchor) -or ([regex]::Matches($project, [regex]::Escape($postsAnchor))).Count -ne 1) { throw 'post.ps1 / the blog spiral.toml changed: update the anchors' }
+    $project = $project.Replace($libAnchor, "packageDir = '$((Join-Path $spiral 'lib').Replace('\', '/'))'").Replace($postsAnchor, "`n$name$postsAnchor")
+    [IO.File]::WriteAllText((Join-Path $overlay 'spiral.toml'), $project)
     $env:MIX_BUILD_PATH = Join-Path ([IO.Path]::GetTempPath()) "fork-post-$name"
     $env:SPIRAL_CELLS_MEMO = '0'
     $env:SPIRAL_CELLS_WARM = '0'
